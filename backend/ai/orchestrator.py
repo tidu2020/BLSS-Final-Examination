@@ -44,12 +44,22 @@ class ReviewOrchestrator:
         "legal_basis": 200,
     }
 
+    # 相关度阈值：决定走哪一级回复策略
+    # high：知识库 + LLM 优化（标注原文）
+    # mid：参考知识库 + LLM（提示参考）
+    # low：纯 LLM 回答（提示未用知识库）
+    RELEVANCE_HIGH = 0.45   # >= 0.45 视为高相关度
+    RELEVANCE_LOW = 0.15    # < 0.15 视为低相关度
+
     def __init__(self, knowledge_base: KnowledgeBase,
                  llm_client: Optional[LlmClient] = None):
         self.kb = knowledge_base
         self.matcher = KeywordMatcher()
         self.retriever = SimilarityRetriever()
         self.llm = llm_client
+        # 用户反馈记录：用于自动优化检索
+        # 格式：{faq_id: {"relevant": int, "irrelevant": int}}
+        self.feedback: Dict[str, Dict[str, int]] = {}
         self.refresh()
 
     def refresh(self) -> None:
@@ -60,36 +70,51 @@ class ReviewOrchestrator:
 
     def review(self, user_input: str,
                top_k: int = 5,
-               with_disclaimer: bool = True) -> Dict:
+               with_disclaimer: bool = True,
+               extra_context: str = "") -> Dict:
         """审核业务咨询，返回结构化结果。
+
+        支持三级相关度兜底策略：
+        - 高相关度（score >= RELEVANCE_HIGH）：知识库 + LLM 优化，标注原文
+        - 中相关度（RELEVANCE_LOW <= score < RELEVANCE_HIGH）：参考知识库 + LLM
+        - 低相关度（score < RELEVANCE_LOW）：纯 LLM 回答，提示未用知识库
 
         Args:
             user_input: 用户的查询文本
             top_k: 返回前 K 条参考
             with_disclaimer: 是否附带免责声明
+            extra_context: 额外上下文（如上传材料文本），参与 LLM 生成
 
         Returns:
             {
-                "query": str,                # 原查询
-                "candidates_count": int,     # 粗筛候选数
-                "results": List[Dict],       # 精排 Top-K（含相似度分）
-                "answer": str,               # 四段式回复文本
-                "disclaimer": str,            # 免责声明
-                "mode": str,                 # "rag+llm" 或 "rag"
+                "query": str,
+                "candidates_count": int,
+                "results": List[Dict],      # 精排 Top-K（含相似度分、来源标记）
+                "answer": str,
+                "disclaimer": str,
+                "mode": str,               # "rag+llm" / "rag" / "llm-only" / "llm-fallback"
+                "relevance": str,          # "high" / "mid" / "low" / "none"
+                "sources": List[Dict],     # 引用的知识库条目（供前端点开查看）
             }
         """
         # 1. 粗筛
         candidates = self.matcher.filter(user_input, self.kb.items, top_n=20)
 
         if not candidates:
-            answer = "未检索到相关知识。"
+            # 无候选：纯 LLM 兜底（若可用）
+            answer, mode = self._generate_llm_only(user_input, extra_context)
+            relevance = "none"
+            if with_disclaimer:
+                answer += self.DISCLAIMER
             return {
                 "query": user_input,
                 "candidates_count": 0,
                 "results": [],
-                "answer": answer + (self.DISCLAIMER if with_disclaimer else ""),
+                "answer": answer,
                 "disclaimer": self.DISCLAIMER if with_disclaimer else "",
-                "mode": "rag",
+                "mode": mode,
+                "relevance": relevance,
+                "sources": [],
             }
 
         # 2. 精排（含相似度分）
@@ -97,11 +122,35 @@ class ReviewOrchestrator:
                                                    top_k=top_k)
         items = [r["item"] for r in ranked_with_score]
 
-        # 3. 生成回复：优先 LLM，失败回退规则拼装
-        answer, mode = self._generate(user_input, items)
+        # 3. 判定相关度等级
+        top_score = ranked_with_score[0]["score"] if ranked_with_score else 0.0
+        if top_score >= self.RELEVANCE_HIGH:
+            relevance = "high"
+        elif top_score >= self.RELEVANCE_LOW:
+            relevance = "mid"
+        else:
+            relevance = "low"
+
+        # 4. 按相关度生成回复
+        answer, mode = self._generate(user_input, items, relevance, extra_context)
 
         if with_disclaimer:
             answer += self.DISCLAIMER
+
+        # 构造引用来源（供前端点开查看）
+        sources = [
+            {
+                "id": r["item"]["id"],
+                "question": r["item"]["question"],
+                "legal_answer": r["item"].get("legal_answer", ""),
+                "compliance_risk": r["item"].get("compliance_risk", ""),
+                "practical_advice": r["item"].get("practical_advice", ""),
+                "legal_basis": r["item"].get("legal_basis", ""),
+                "score": r["score"],
+                "cited": relevance in ("high", "mid"),
+            }
+            for r in ranked_with_score
+        ]
 
         return {
             "query": user_input,
@@ -118,6 +167,8 @@ class ReviewOrchestrator:
             "answer": answer,
             "disclaimer": self.DISCLAIMER if with_disclaimer else "",
             "mode": mode,
+            "relevance": relevance,
+            "sources": sources,
         }
 
     def review_text(self, user_input: str, top_k: int = 5) -> str:
@@ -126,19 +177,28 @@ class ReviewOrchestrator:
 
     # ---------- 内部方法 ----------
 
-    def _generate(self, query: str, items: List[Dict]) -> tuple:
-        """生成回复文本，返回 (answer, mode)。
+    def _generate(self, query: str, items: List[Dict],
+                  relevance: str = "high",
+                  extra_context: str = "") -> tuple:
+        """按相关度等级生成回复，返回 (answer, mode)。
 
-        优先用 LLM 基于检索结果生成；LLM 不可用或失败时回退规则拼装。
+        - high：知识库 + LLM 优化（标注原文）
+        - mid：参考知识库 + LLM（提示参考）
+        - low：纯 LLM 回答（提示未用知识库）
         """
         # 规则拼装作为兜底（始终先算好，保证可用）
         fallback = self._compose(items)
 
+        # 低相关度：纯 LLM 回答
+        if relevance == "low":
+            return self._generate_llm_only(query, extra_context, fallback)
+
         if not self.llm or not self.llm.available:
+            # LLM 不可用，回退规则拼装
             return fallback, "rag"
 
         try:
-            answer = self._generate_with_llm(query, items)
+            answer = self._generate_with_llm(query, items, relevance, extra_context)
             if answer and answer.strip():
                 return answer.strip(), "rag+llm"
             logger.warning("LLM 返回空内容，回退规则拼装")
@@ -147,16 +207,56 @@ class ReviewOrchestrator:
             logger.warning("LLM 调用失败，回退规则拼装：%s", e)
             return fallback, "rag"
 
-    def _generate_with_llm(self, query: str, items: List[Dict]) -> str:
-        """用大模型基于检索到的知识生成四段式回复。
+    def _generate_llm_only(self, query: str, extra_context: str = "",
+                          fallback: str = "") -> tuple:
+        """纯 LLM 回答（不依赖知识库）。
 
-        将 Top-K 检索结果作为上下文，约束模型只依据知识库作答。
+        若 LLM 不可用，回退 fallback 或默认提示。
+        """
+        if not self.llm or not self.llm.available:
+            return fallback or "未检索到相关知识，且大模型未配置。", "rag"
+
+        system_prompt = (
+            "你是国有企业法务合规助手。当前问题在知识库中未找到高相关度案例，"
+            "请你基于通用法律知识作答，并明确提示本答复未引用知识库案例，"
+            "建议后续提交法务获取正式意见。\n"
+            "回答要求：\n"
+            "1. 结构清晰，分四段：法律解答、合规风险、实操建议、相关法条；\n"
+            "2. 语言专业但通俗易懂；\n"
+            "3. 不要编造具体法条编号，如不确定请说明；\n"
+            "4. 开头标注【本答复未引用知识库案例】。"
+        )
+        user_prompt = f"业务咨询：{query}"
+        if extra_context:
+            user_prompt += f"\n\n附加上下文（用户上传材料）：\n{extra_context[:2000]}"
+
+        try:
+            answer = self.llm.chat(
+                [{"role": "system", "content": system_prompt},
+                 {"role": "user", "content": user_prompt}],
+                temperature=self.llm.temperature,
+                max_tokens=self.llm.max_tokens,
+            )
+            if answer and answer.strip():
+                return answer.strip(), "llm-only"
+            return fallback or "未检索到相关知识。", "rag"
+        except LlmError as e:
+            logger.warning("纯 LLM 回答失败，回退：%s", e)
+            return fallback or "未检索到相关知识。", "rag"
+
+    def _generate_with_llm(self, query: str, items: List[Dict],
+                            relevance: str = "high",
+                            extra_context: str = "") -> str:
+        """用大模型基于检索到的知识生成回复。
+
+        高相关度：严格依据知识库，标注原文来源。
+        中相关度：参考知识库 + 通用知识，提示参考。
         """
         # 拼接知识库上下文
         context_parts = []
         for i, it in enumerate(items, 1):
             context_parts.append(
-                f"【案例{i}】\n"
+                f"【案例{i}】（id={it.get('id', '')}）\n"
                 f"问题：{it.get('question', '')}\n"
                 f"法律解答：{it.get('legal_answer', '')}\n"
                 f"合规风险：{it.get('compliance_risk', '')}\n"
@@ -165,20 +265,35 @@ class ReviewOrchestrator:
             )
         context = "\n\n".join(context_parts)
 
-        system_prompt = (
-            "你是国有企业法务合规助手。请严格依据下方提供的知识库案例回答业务咨询，"
-            "不得编造知识库外的法律结论。\n"
-            "回答要求：\n"
-            "1. 结构清晰，分四段：法律解答、合规风险、实操建议、相关法条；\n"
-            "2. 语言专业但通俗易懂，适合业务人员理解；\n"
-            "3. 若知识库案例不能完全覆盖用户问题，明确指出需进一步咨询法务；\n"
-            "4. 不要输出与问题无关的内容。"
-        )
-        user_prompt = (
-            f"知识库参考案例：\n{context}\n\n"
-            f"业务咨询：{query}\n\n"
-            f"请基于上述案例给出四段式法务意见。"
-        )
+        if relevance == "high":
+            system_prompt = (
+                "你是国有企业法务合规助手。请严格依据下方提供的知识库案例回答业务咨询，"
+                "不得编造知识库外的法律结论。\n"
+                "回答要求：\n"
+                "1. 结构清晰，分四段：法律解答、合规风险、实操建议、相关法条；\n"
+                "2. 引用知识库案例时，标注【参考案例N】（N 为案例编号）；\n"
+                "3. 语言专业但通俗易懂，适合业务人员理解；\n"
+                "4. 若知识库案例不能完全覆盖用户问题，明确指出需进一步咨询法务；\n"
+                "5. 在回复末尾列出「引用的知识库案例」清单，含案例 id 与问题摘要。"
+            )
+        else:  # mid
+            system_prompt = (
+                "你是国有企业法务合规助手。下方知识库案例与用户问题相关度中等，"
+                "请参考这些案例并结合通用法律知识作答。\n"
+                "回答要求：\n"
+                "1. 结构清晰，分四段：法律解答、合规风险、实操建议、相关法条；\n"
+                "2. 引用知识库案例时标注【参考案例N】；\n"
+                "3. 明确区分哪些内容来自知识库、哪些来自通用知识；\n"
+                "4. 提示用户本问题与知识库相关度中等，建议提交法务确认；\n"
+                "5. 不要编造具体法条编号。"
+            )
+
+        user_prompt = f"知识库参考案例：\n{context}\n\n业务咨询：{query}"
+        if extra_context:
+            user_prompt += (
+                f"\n\n附加上下文（用户上传材料）：\n{extra_context[:2000]}"
+            )
+        user_prompt += "\n\n请基于上述信息给出四段式法务意见。"
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -189,6 +304,23 @@ class ReviewOrchestrator:
             temperature=self.llm.temperature,
             max_tokens=self.llm.max_tokens,
         )
+
+    # ---------- 用户反馈 ----------
+
+    def record_feedback(self, faq_id: str, relevant: bool) -> None:
+        """记录用户对某条知识库引用的反馈（相关/不相关）。
+
+        系统可基于这类标注自动优化检索结果（调整打分）。
+        """
+        if faq_id not in self.feedback:
+            self.feedback[faq_id] = {"relevant": 0, "irrelevant": 0}
+        key = "relevant" if relevant else "irrelevant"
+        self.feedback[faq_id][key] += 1
+        logger.info("反馈记录 faq_id=%s relevant=%s", faq_id, relevant)
+
+    def feedback_stats(self) -> Dict:
+        """返回反馈统计。"""
+        return self.feedback
 
     def _rank_with_score(self, query: str,
                          candidates: List[Dict],

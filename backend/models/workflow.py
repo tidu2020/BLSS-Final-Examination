@@ -169,6 +169,25 @@ class WorkOrder:
         """归档完成。"""
         self.status = "archived"
 
+    def withdraw(self) -> None:
+        """业务撤回工单（仅法务开始审核前可撤回）。"""
+        if self.status not in ("submitted_to_legal",):
+            raise RuntimeError(f"工单状态 {self.status} 不可撤回")
+        self.status = "withdrawn"
+
+    def reject_archive(self, reason: str = "") -> None:
+        """管理员退回归档，回到 reviewing 状态。"""
+        if self.status not in ("archived",):
+            raise RuntimeError(f"工单状态 {self.status} 不可退归档")
+        self.status = "reviewing"
+        self.archive_reject_reason = reason
+
+    def reopen_archive_edit(self) -> None:
+        """法务重新编辑已归档内容，回到 reviewing 状态。"""
+        if self.status not in ("archived",):
+            raise RuntimeError(f"工单状态 {self.status} 不可重新编辑")
+        self.status = "reviewing"
+
     # ---------- 序列化 ----------
 
     def to_dict(self) -> Dict:
@@ -193,6 +212,7 @@ class WorkOrder:
             "confirmed_faqs": self.confirmed_faqs,
             # 状态
             "status": self.status,
+            "archive_reject_reason": getattr(self, "archive_reject_reason", ""),
         }
 
     @classmethod
@@ -216,6 +236,7 @@ class WorkOrder:
         order.confirmed_at = data.get("confirmed_at", "")
         order.confirmed_faqs = data.get("confirmed_faqs", [])
         order.status = data.get("status", "submitted_to_legal")
+        order.archive_reject_reason = data.get("archive_reject_reason", "")
         return order
 
 

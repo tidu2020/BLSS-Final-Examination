@@ -29,3 +29,10 @@ data/work_orders/
 
 # 临时文件
 cookies.txt
+
+# 外部参考项目（仅本地参考，不提交）
+external/
+_ref_contract_review/
+
+# file_review 模块运行时输出
+backend/file_review/output/

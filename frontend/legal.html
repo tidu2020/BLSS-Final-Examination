@@ -20,6 +20,8 @@
         <div class="sidebar">
             <div class="nav-item active" data-tab="orders">待办工单</div>
             <div class="nav-item" data-tab="kb">知识库检索</div>
+            <div class="nav-item" data-tab="kball">知识库浏览</div>
+            <div class="nav-item" data-tab="aitool">AI 审核工具</div>
             <div class="nav-item" data-tab="reports">报告</div>
             <div class="nav-item" data-tab="archive">归档</div>
         </div>
@@ -58,6 +60,39 @@
                         <button class="btn" onclick="kbSearch()">检索</button>
                     </div>
                     <div id="kbResults"></div>
+                </div>
+            </div>
+
+            <!-- 知识库浏览（法务看全部） -->
+            <div id="tab-kball" class="tab-pane hidden">
+                <div class="card">
+                    <div class="card-title">全部知识库条目</div>
+                    <div class="toolbar">
+                        <input type="text" id="kbAllKeyword" placeholder="关键词搜索"
+                            style="flex:1" onkeydown="if(event.key==='Enter')loadKbAll()">
+                        <button class="btn" onclick="loadKbAll()">查询</button>
+                    </div>
+                    <div id="kbAllList" style="margin-top:16px"></div>
+                </div>
+            </div>
+
+            <!-- AI 审核工具 -->
+            <div id="tab-aitool" class="tab-pane hidden">
+                <div class="card">
+                    <div class="card-title">AI 审核工具</div>
+                    <p style="color:var(--text-light);font-size:13px;margin-bottom:12px">
+                        法务可基于知识库检索+大模型生成，对自定义问题进行审核。
+                    </p>
+                    <div class="form-group">
+                        <textarea id="aiToolQuery" rows="3"
+                            placeholder="输入要审核的问题"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <textarea id="aiToolCtx" rows="3"
+                            placeholder="可选：补充上下文（如合同片段）"></textarea>
+                    </div>
+                    <button class="btn" onclick="callAiTool()">调用</button>
+                    <div id="aiToolResult" style="margin-top:16px"></div>
                 </div>
             </div>
 
@@ -128,6 +163,7 @@
                 p.classList.add('hidden'));
             document.getElementById('tab-' + tab).classList.remove('hidden');
             if (tab === 'archive') loadArchive();
+            if (tab === 'kball') loadKbAll();
         }
 
         // ---------- 工单 ----------
@@ -201,9 +237,13 @@
                     html += `<button class="btn btn-secondary" onclick="saveConclusion('${o.id}')">保存结论</button>`;
                     html += `<button class="btn btn-danger" onclick="confirmOrder('${o.id}')">确认完成</button>`;
                     html += `<button class="btn btn-secondary" onclick="showAddFaq('${o.id}')">新增入库条目</button>`;
+                    html += `<button class="btn btn-secondary" onclick="summarizeFaq('${o.id}')">自动总结FAQ</button>`;
                 }
                 if (o.status === 'confirmed') {
                     html += `<button class="btn" onclick="archiveOrder('${o.id}')">归档</button>`;
+                }
+                if (o.status === 'archived') {
+                    html += `<button class="btn btn-secondary" onclick="reopenEdit('${o.id}')">重新编辑归档</button>`;
                 }
                 html += '</div>';
 
@@ -455,6 +495,139 @@
 
         function downloadArchive(id) {
             window.open(`/api/archive/orders/${id}/package`, '_blank');
+        }
+
+        // ---------- 知识库浏览（L2） ----------
+        async function loadKbAll() {
+            const keyword = document.getElementById('kbAllKeyword').value.trim();
+            const url = '/api/legal/kb/items' + (keyword ? `?keyword=${encodeURIComponent(keyword)}` : '');
+            try {
+                const items = await API.get(url);
+                const el = document.getElementById('kbAllList');
+                if (!items.length) {
+                    el.innerHTML = '<div class="empty">暂无条目</div>';
+                    return;
+                }
+                el.innerHTML = items.map(it => `
+                    <div class="ref-item">
+                        <span class="ref-score">${escapeHtml(it.category||'-')}</span>
+                        <div class="ref-q">[${it.id}] ${escapeHtml(it.question)}</div>
+                        <div style="margin-top:4px;font-size:13px"><strong>法律解答：</strong>${escapeHtml((it.legal_answer||'').slice(0,180))}...</div>
+                        <div style="margin-top:4px;font-size:12px;color:var(--text-light)">标签：${(it.tags||[]).map(escapeHtml).join(', ') || '-'}</div>
+                        <div style="margin-top:6px">
+                            <button class="btn btn-sm" onclick="viewKbItem('${it.id}')">详情</button>
+                            <button class="btn btn-sm" onclick="editRequestKb('${it.id}')">申请修改</button>
+                        </div>
+                    </div>`).join('');
+            } catch (e) { toast(e.message, 'error'); }
+        }
+
+        async function viewKbItem(id) {
+            try {
+                const it = await API.get(`/api/legal/kb/items/${id}`);
+                let html = `<h3>条目 ${it.id}</h3>`;
+                html += `<p><strong>问题：</strong>${escapeHtml(it.question||'')}</p>`;
+                html += `<p><strong>法律解答：</strong>${escapeHtml(it.legal_answer||'')}</p>`;
+                if (it.compliance_risk) html += `<p><strong>合规风险：</strong>${escapeHtml(it.compliance_risk)}</p>`;
+                if (it.practical_advice) html += `<p><strong>实务建议：</strong>${escapeHtml(it.practical_advice)}</p>`;
+                if (it.legal_basis) html += `<p><strong>法律依据：</strong>${escapeHtml(it.legal_basis)}</p>`;
+                if (it.tags && it.tags.length) html += `<p><strong>标签：</strong>${it.tags.map(escapeHtml).join(', ')}</p>`;
+                showModal(html);
+            } catch (e) { toast(e.message, 'error'); }
+        }
+
+        function editRequestKb(id) {
+            const html = `
+                <h3>申请修改条目 ${id}</h3>
+                <div class="form-group">
+                    <label>修改原因</label>
+                    <input type="text" id="erReason" placeholder="如：法律依据错误">
+                </div>
+                <div class="form-group">
+                    <label>修改字段（JSON）</label>
+                    <textarea id="erPatch" rows="5" placeholder='{"legal_answer":"...","legal_basis":"..."}'></textarea>
+                </div>
+                <div class="toolbar">
+                    <button class="btn" onclick="submitEditRequest('${id}')">提交申请</button>
+                    <button class="btn btn-secondary" onclick="closeModal()">取消</button>
+                </div>`;
+            showModal(html);
+        }
+
+        async function submitEditRequest(id) {
+            const reason = document.getElementById('erReason').value.trim();
+            let patch;
+            try {
+                patch = JSON.parse(document.getElementById('erPatch').value || '{}');
+            } catch { toast('patch 不是合法 JSON', 'error'); return; }
+            if (!reason) { toast('请填写修改原因', 'warning'); return; }
+            if (!Object.keys(patch).length) { toast('patch 不能为空', 'warning'); return; }
+            try {
+                const res = await API.post(`/api/legal/kb/items/${id}/edit_request`, { patch, reason });
+                toast(`已提交申请：${res.request_id}`, 'success');
+                closeModal();
+            } catch (e) { toast(e.message, 'error'); }
+        }
+
+        // ---------- AI 审核工具（L4） ----------
+        async function callAiTool() {
+            const query = document.getElementById('aiToolQuery').value.trim();
+            const ctx = document.getElementById('aiToolCtx').value.trim();
+            if (!query) { toast('请输入查询', 'warning'); return; }
+            const el = document.getElementById('aiToolResult');
+            el.innerHTML = '<div class="empty">正在调用 AI...</div>';
+            try {
+                const res = await API.post('/api/legal/ai_tool', { query, extra_context: ctx });
+                let html = `<div class="chat-msg ai"><div class="role">AI 工具</div>${escapeHtml(res.answer)}</div>`;
+                if (res.mode) html += `<div style="margin-top:4px;font-size:12px;color:var(--text-light)">模式：${escapeHtml(res.mode)}</div>`;
+                if (res.results && res.results.length) {
+                    html += '<div style="margin-top:8px;font-size:12px;color:var(--text-light)">相关条目：</div>';
+                    res.results.forEach(r => {
+                        html += `<div class="ref-item"><span class="ref-score">${(r.score*100).toFixed(0)}%</span><div class="ref-q">[${r.id}] ${escapeHtml(r.question)}</div></div>`;
+                    });
+                }
+                el.innerHTML = html;
+            } catch (e) { toast(e.message, 'error'); el.innerHTML = ''; }
+        }
+
+        // ---------- L6：自动总结 FAQ + 冲突检测 ----------
+        async function summarizeFaq(orderId) {
+            if (!confirm('将基于本工单对话+法务结论自动总结 FAQ，并检测与历史答复冲突，继续？')) return;
+            try {
+                const res = await API.post(`/api/legal/orders/${orderId}/summarize_faq`);
+                let html = '<h3>自动总结 FAQ 结果</h3>';
+                if (res.has_conflict) {
+                    html += '<div class="disclaimer" style="background:#fdecea;color:#c0392b">检测到与历史答复相似条目，请人工确认是否冲突：</div>';
+                    res.conflicts.forEach(c => {
+                        html += `<div class="ref-item" style="border-left:3px solid #c0392b">
+                            <span class="ref-score">${(c.score*100).toFixed(0)}%</span>
+                            <div class="ref-q">[${c.id}] ${escapeHtml(c.question)}</div>
+                            <div style="font-size:12px;color:var(--text-light);margin-top:4px">${escapeHtml(c.legal_answer)}</div>
+                        </div>`;
+                    });
+                } else {
+                    html += '<div class="disclaimer" style="background:#e8f5e9;color:#27ae60">未发现冲突</div>';
+                }
+                html += '<h4 style="margin-top:16px">总结条目</h4>';
+                const f = res.faq || {};
+                html += `<p><strong>问题：</strong>${escapeHtml(f.question||'')}</p>`;
+                html += `<p><strong>法律解答：</strong>${escapeHtml(f.legal_answer||'')}</p>`;
+                if (f.compliance_risk) html += `<p><strong>合规风险：</strong>${escapeHtml(f.compliance_risk)}</p>`;
+                if (f.practical_advice) html += `<p><strong>实务建议：</strong>${escapeHtml(f.practical_advice)}</p>`;
+                if (f.legal_basis) html += `<p><strong>法律依据：</strong>${escapeHtml(f.legal_basis)}</p>`;
+                showModal(html);
+            } catch (e) { toast(e.message, 'error'); }
+        }
+
+        // ---------- L1：重新编辑归档 ----------
+        async function reopenEdit(orderId) {
+            if (!confirm('重新编辑归档？工单将回到审核中状态。')) return;
+            try {
+                await API.post(`/api/legal/orders/${orderId}/reopen_edit`);
+                toast('已重新打开编辑', 'success');
+                closeModal();
+                loadOrders();
+            } catch (e) { toast(e.message, 'error'); }
         }
 
         // 通用模态框

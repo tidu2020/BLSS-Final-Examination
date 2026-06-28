@@ -140,3 +140,37 @@ def archive_order(order_id: str):
     order.archive()
     work_order_store.save(order)
     return jsonify({"status": order.status})
+
+
+# ---------- A2：管理员退回归档 ----------
+
+@bp.route("/orders/<order_id>/reject", methods=["POST"])
+@require_role("admin")
+def reject_archive(order_id: str):
+    """管理员退回归档，工单回到 reviewing 状态。
+
+    请求体：{"reason": "..."}
+    """
+    order = work_order_store.get(order_id)
+    if not order:
+        return jsonify({"error": "工单不存在"}), 404
+    data = request.get_json(silent=True) or {}
+    reason = data.get("reason", "")
+    try:
+        order.reject_archive(reason)
+        work_order_store.save(order)
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"status": order.status, "reason": reason})
+
+
+# ---------- A3：管理员看工单详细内容 ----------
+
+@bp.route("/orders/<order_id>")
+@require_role("legal", "admin")
+def get_archived_detail(order_id: str):
+    """管理员/法务查看归档工单完整详情。"""
+    order = work_order_store.get(order_id)
+    if not order:
+        return jsonify({"error": "工单不存在"}), 404
+    return jsonify(order.to_dict())

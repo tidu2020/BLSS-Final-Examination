@@ -59,18 +59,29 @@ def _get_or_create_session() -> Session:
 @bp.route("/consult", methods=["POST"])
 @require_role("business")
 def consult():
-    """AI 咨询。
+    """AI 咨询（三级兜底 + 支持上传材料作为上下文）。
 
-    请求体：{"question": "..."}
-    返回：{"answer": "...", "results": [...], "disclaimer": "..."}
+    请求体：{"question": "...", "with_materials": true}
+    返回：{"answer": "...", "results": [...], "sources": [...],
+           "mode": "...", "relevance": "...", "disclaimer": "..."}
     """
     data = request.get_json() or {}
     question = (data.get("question") or "").strip()
     if not question:
         return jsonify({"error": "问题不能为空"}), 400
 
+    # 若启用材料合并，将已上传材料作为额外上下文
+    extra_context = ""
+    if data.get("with_materials"):
+        sess = _get_or_create_session()
+        if sess.materials:
+            mat_parts = []
+            for m in sess.materials:
+                mat_parts.append(f"[{m['filename']}]\n{m['content'][:1500]}")
+            extra_context = "\n\n".join(mat_parts)
+
     # 调用 AI 引擎
-    result = orchestrator.review(question, top_k=5)
+    result = orchestrator.review(question, top_k=5, extra_context=extra_context)
     # 记录到会话
     sess = _get_or_create_session()
     sess.add_question(question, result["answer"])
@@ -85,6 +96,9 @@ def consult():
             }
             for r in result["results"]
         ],
+        "sources": result["sources"],
+        "mode": result["mode"],
+        "relevance": result["relevance"],
         "disclaimer": result["disclaimer"],
         "session_id": sess.id,
     })
@@ -198,3 +212,27 @@ def get_order(order_id: str):
         return jsonify({"error": "无权查看他人工单"}), 403
 
     return jsonify(order.to_dict())
+
+
+@bp.route("/orders/<order_id>/withdraw", methods=["POST"])
+@require_role("business")
+def withdraw_order(order_id: str):
+    """业务撤回工单（仅法务开始审核前可撤回）。
+
+    返回：{"status": "withdrawn"}
+    """
+    order = work_order_store.get(order_id)
+    if not order:
+        return jsonify({"error": "工单不存在"}), 404
+
+    user = current_user()
+    if order.submitter != user["id"]:
+        return jsonify({"error": "只能撤回自己的工单"}), 403
+
+    try:
+        order.withdraw()
+        work_order_store.save(order)
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 400
+
+    return jsonify({"status": "withdrawn", "order_id": order_id})

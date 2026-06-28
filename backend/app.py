@@ -29,6 +29,7 @@ from backend.ai import routes as ai_routes
 from backend.knowledge import routes as knowledge_routes
 from backend.report import routes as report_routes
 from backend.archive import routes as archive_routes
+from backend.file_review import routes as file_review_routes
 
 
 def create_app() -> Flask:
@@ -76,10 +77,24 @@ def create_app() -> Flask:
                                      orchestrator)
     legal_routes.init_dependencies(account_store, work_order_store,
                                    knowledge_base, orchestrator)
-    ai_routes.init_dependencies(orchestrator)
+    ai_routes.init_dependencies(orchestrator, llm_client)
     knowledge_routes.init_dependencies(knowledge_base, orchestrator)
     report_routes.init_dependencies(work_order_store, knowledge_base)
     archive_routes.init_dependencies(work_order_store)
+
+    # 合同审核模块：独立运行，自管理依赖（不需要外部注入）
+    # file_review.routes 自带 LLMClient 与 AppConfig
+    # 此处仅创建输出目录，不强制注入
+    try:
+        from backend.file_review.config import app_config as _fr_cfg
+        os.makedirs(_fr_cfg.output_dir, exist_ok=True)
+        print(f"[file_review] 输出目录：{_fr_cfg.output_dir}")
+        if _fr_cfg.llm.api_key:
+            print(f"[file_review] LLM 已就绪：{_fr_cfg.llm.model}")
+        else:
+            print("[file_review] LLM 未配置，审核功能不可用")
+    except Exception as e:
+        print(f"[file_review] 初始化警告：{e}")
 
     # 3. 注册 API 蓝图
     app.register_blueprint(auth_routes.bp)
@@ -89,6 +104,7 @@ def create_app() -> Flask:
     app.register_blueprint(knowledge_routes.bp)
     app.register_blueprint(report_routes.bp)
     app.register_blueprint(archive_routes.bp)
+    app.register_blueprint(file_review_routes.bp)
 
     # 4. 前端静态文件服务
     frontend_dir = config.FRONTEND_DIR

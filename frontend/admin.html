@@ -20,7 +20,10 @@
         <div class="sidebar">
             <div class="nav-item active" data-tab="dashboard">仪表盘</div>
             <div class="nav-item" data-tab="kb">知识库管理</div>
+            <div class="nav-item" data-tab="similar">相似合并</div>
+            <div class="nav-item" data-tab="approvals">修改申请</div>
             <div class="nav-item" data-tab="orders">全部工单</div>
+            <div class="nav-item" data-tab="archive">归档管理</div>
             <div class="nav-item" data-tab="accounts">账户管理</div>
         </div>
 
@@ -60,6 +63,40 @@
                 </div>
             </div>
 
+            <!-- 相似合并 -->
+            <div id="tab-similar" class="tab-pane hidden">
+                <div class="card">
+                    <div class="card-title">相似知识合并</div>
+                    <p style="color:var(--text-light);font-size:13px;margin-bottom:12px">
+                        选择一条知识，系统会列出相似条目（相似度≥50%），可发起合并申请。
+                        合并需法务确认后生效。
+                    </p>
+                    <div class="toolbar">
+                        <input type="text" id="simItemQ" placeholder="输入知识条目 ID 或问题关键词"
+                            style="flex:1" onkeydown="if(event.key==='Enter')loadKbForSimilar()">
+                        <button class="btn" onclick="loadKbForSimilar()">查找条目</button>
+                    </div>
+                    <div id="simKbList" style="margin-top:16px"></div>
+                    <div id="simResult" style="margin-top:16px"></div>
+                </div>
+            </div>
+
+            <!-- 修改申请审批 -->
+            <div id="tab-approvals" class="tab-pane hidden">
+                <div class="card">
+                    <div class="card-title">知识库修改申请审批</div>
+                    <div class="toolbar">
+                        <select id="apprStatus" onchange="loadEditRequests()">
+                            <option value="pending">待审批</option>
+                            <option value="approved">已批准</option>
+                            <option value="rejected">已驳回</option>
+                            <option value="">全部</option>
+                        </select>
+                    </div>
+                    <div id="apprList" style="margin-top:16px"></div>
+                </div>
+            </div>
+
             <!-- 全部工单 -->
             <div id="tab-orders" class="tab-pane hidden">
                 <div class="card">
@@ -76,9 +113,23 @@
                     <table>
                         <thead><tr>
                             <th>工单号</th><th>提交人</th><th>提交时间</th>
-                            <th>状态</th><th>审核人</th>
+                            <th>状态</th><th>审核人</th><th>操作</th>
                         </tr></thead>
                         <tbody id="allOrdersBody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 归档管理 -->
+            <div id="tab-archive" class="tab-pane hidden">
+                <div class="card">
+                    <div class="card-title">归档管理</div>
+                    <table>
+                        <thead><tr>
+                            <th>工单号</th><th>提交人</th><th>确认时间</th>
+                            <th>审核人</th><th>操作</th>
+                        </tr></thead>
+                        <tbody id="archiveBody"></tbody>
                     </table>
                 </div>
             </div>
@@ -131,6 +182,8 @@
             if (tab === 'orders') loadAllOrders();
             if (tab === 'accounts') loadAccounts();
             if (tab === 'dashboard') loadStats();
+            if (tab === 'approvals') loadEditRequests();
+            if (tab === 'archive') loadArchive();
         }
 
         // ---------- 仪表盘 ----------
@@ -301,7 +354,7 @@
                 const orders = await API.get(url);
                 const body = document.getElementById('allOrdersBody');
                 if (!orders.length) {
-                    body.innerHTML = '<tr><td colspan="5" class="empty">暂无工单</td></tr>';
+                    body.innerHTML = '<tr><td colspan="6" class="empty">暂无工单</td></tr>';
                     return;
                 }
                 body.innerHTML = orders.map(o => `
@@ -311,7 +364,165 @@
                         <td>${fmtTime(o.submitted_at)}</td>
                         <td>${statusTag(o.status)}</td>
                         <td>${escapeHtml(o.reviewer_name || '-')}</td>
+                        <td><button class="btn btn-sm" onclick="viewOrderDetail('${o.id}')">查看详情</button></td>
                     </tr>`).join('');
+            } catch (e) { toast(e.message, 'error'); }
+        }
+
+        // ---------- A3：管理员看工单详细内容 ----------
+        async function viewOrderDetail(id) {
+            try {
+                const o = await API.get(`/api/archive/orders/${id}`);
+                let html = `<h3>工单 ${o.id}</h3>`;
+                html += `<p><strong>状态：</strong>${statusTag(o.status)}</p>`;
+                html += `<p><strong>提交人：</strong>${escapeHtml(o.submitter_name||o.submitter)}</p>`;
+                html += `<p><strong>提交时间：</strong>${fmtTime(o.submitted_at)}</p>`;
+                if (o.reviewer_name) html += `<p><strong>审核人：</strong>${escapeHtml(o.reviewer_name)}</p>`;
+                if (o.archive_reject_reason) {
+                    html += `<div class="disclaimer" style="background:#fdecea;color:#c0392b">退回原因：${escapeHtml(o.archive_reject_reason)}</div>`;
+                }
+                html += '<h4 style="margin-top:16px">咨询对话</h4>';
+                (o.dialogue||[]).forEach(d => {
+                    const role = { user: '业务', ai: 'AI', legal: '法务' }[d.role] || d.role;
+                    html += `<div class="chat-msg ${d.role==='user'?'user':'ai'}"><div class="role">${role}</div>${escapeHtml(d.content)}</div>`;
+                });
+                if (o.legal_conclusion) {
+                    html += '<h4 style="margin-top:16px">法务结论</h4>';
+                    html += `<div class="chat-msg ai">${escapeHtml(o.legal_conclusion)}</div>`;
+                }
+                showModal(html);
+            } catch (e) { toast(e.message, 'error'); }
+        }
+
+        // ---------- A1+A2：归档管理 ----------
+        async function loadArchive() {
+            try {
+                const orders = await API.get('/api/archive/orders');
+                const body = document.getElementById('archiveBody');
+                if (!orders.length) {
+                    body.innerHTML = '<tr><td colspan="5" class="empty">暂无归档工单</td></tr>';
+                    return;
+                }
+                body.innerHTML = orders.map(o => `
+                    <tr>
+                        <td>${o.id}</td>
+                        <td>${escapeHtml(o.submitter_name || o.submitter)}</td>
+                        <td>${fmtTime(o.confirmed_at)}</td>
+                        <td>${escapeHtml(o.reviewer_name || '-')}</td>
+                        <td>
+                            <button class="btn btn-sm" onclick="viewOrderDetail('${o.id}')">详情</button>
+                            <button class="btn btn-sm" onclick="downloadArchive('${o.id}')">下载</button>
+                            <button class="btn btn-sm btn-danger" onclick="rejectArchive('${o.id}')">退回</button>
+                        </td>
+                    </tr>`).join('');
+            } catch (e) { toast(e.message, 'error'); }
+        }
+
+        function downloadArchive(id) {
+            window.open(`/api/archive/orders/${id}/package`, '_blank');
+        }
+
+        async function rejectArchive(id) {
+            const reason = prompt('请输入退回原因：');
+            if (reason === null) return;
+            try {
+                await API.post(`/api/archive/orders/${id}/reject`, { reason });
+                toast('已退回归档', 'success');
+                loadArchive();
+            } catch (e) { toast(e.message, 'error'); }
+        }
+
+        // ---------- A4：相似知识合并 ----------
+        async function loadKbForSimilar() {
+            const q = document.getElementById('simItemQ').value.trim();
+            let url = '/api/kb/items?limit=30';
+            if (q) url += `&q=${encodeURIComponent(q)}`;
+            try {
+                const res = await API.get(url);
+                const el = document.getElementById('simKbList');
+                if (!res.items.length) {
+                    el.innerHTML = '<div class="empty">暂无条目</div>';
+                    return;
+                }
+                el.innerHTML = res.items.map(it => `
+                    <div class="ref-item">
+                        <div class="ref-q">[${it.id}] ${escapeHtml(it.question)}</div>
+                        <button class="btn btn-sm" onclick="findSimilar('${it.id}')">查找相似</button>
+                    </div>`).join('');
+            } catch (e) { toast(e.message, 'error'); }
+        }
+
+        async function findSimilar(itemId) {
+            try {
+                const res = await API.get(`/api/kb/items/${itemId}/similar`);
+                const el = document.getElementById('simResult');
+                if (!res.can_merge) {
+                    el.innerHTML = '<div class="empty">未发现相似条目（相似度<50%）</div>';
+                    return;
+                }
+                let html = `<h4>与 [${itemId}] 相似的条目</h4>`;
+                html += res.similar.map(s => `
+                    <div class="ref-item">
+                        <span class="ref-score">${(s.score*100).toFixed(0)}%</span>
+                        <div class="ref-q">[${s.id}] ${escapeHtml(s.question)}</div>
+                        <button class="btn btn-sm" onclick="mergeItems('${itemId}','${s.id}')">合并到此</button>
+                        <button class="btn btn-sm" onclick="mergeItems('${s.id}','${itemId}')">反向合并</button>
+                    </div>`).join('');
+                el.innerHTML = html;
+            } catch (e) { toast(e.message, 'error'); }
+        }
+
+        async function mergeItems(primaryId, secondaryId) {
+            if (!confirm(`确认合并？将保留 [${primaryId}]，删除 [${secondaryId}]，并生成法务确认申请。`)) return;
+            try {
+                const res = await API.post('/api/kb/items/merge', {
+                    primary_id: primaryId,
+                    secondary_id: secondaryId
+                });
+                toast(res.message || '合并申请已生成', 'success');
+            } catch (e) { toast(e.message, 'error'); }
+        }
+
+        // ---------- L3：管理员审批修改申请 ----------
+        async function loadEditRequests() {
+            const status = document.getElementById('apprStatus').value || 'pending';
+            try {
+                const reqs = await API.get(`/api/kb/edit_requests?status=${status}`);
+                const el = document.getElementById('apprList');
+                if (!reqs.length) {
+                    el.innerHTML = '<div class="empty">暂无申请</div>';
+                    return;
+                }
+                el.innerHTML = reqs.map(r => `
+                    <div class="ref-item">
+                        <div class="ref-q">申请号：${r.id} · 条目 ${r.item_id}</div>
+                        <div style="font-size:12px;color:var(--text-light)">申请人：${escapeHtml(r.submitter_name||'')} · 时间：${fmtTime(r.created_at)}</div>
+                        <div style="margin-top:4px"><strong>原因：</strong>${escapeHtml(r.reason||'')}</div>
+                        <div style="margin-top:4px"><strong>修改字段：</strong><pre style="white-space:pre-wrap;font-size:12px;max-height:200px;overflow:auto;background:#f5f5f5;padding:8px;border-radius:4px">${escapeHtml(JSON.stringify(r.patch,null,2))}</pre></div>
+                        ${r.status === 'pending' ? `
+                        <div style="margin-top:6px">
+                            <button class="btn btn-sm" onclick="approveEdit('${r.id}')">批准</button>
+                            <button class="btn btn-sm btn-danger" onclick="rejectEdit('${r.id}')">驳回</button>
+                        </div>` : `<div style="margin-top:6px;font-size:12px;color:var(--text-light)">状态：${r.status}</div>`}
+                    </div>`).join('');
+            } catch (e) { toast(e.message, 'error'); }
+        }
+
+        async function approveEdit(reqId) {
+            if (!confirm('确认批准该修改申请？将应用到知识库。')) return;
+            try {
+                await API.post(`/api/kb/edit_requests/${reqId}/approve`);
+                toast('已批准并应用', 'success');
+                loadEditRequests();
+            } catch (e) { toast(e.message, 'error'); }
+        }
+
+        async function rejectEdit(reqId) {
+            if (!confirm('确认驳回该修改申请？')) return;
+            try {
+                await API.post(`/api/kb/edit_requests/${reqId}/reject`);
+                toast('已驳回', 'success');
+                loadEditRequests();
             } catch (e) { toast(e.message, 'error'); }
         }
 

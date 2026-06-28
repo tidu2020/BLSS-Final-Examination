@@ -21,6 +21,7 @@
             <div class="nav-item active" data-tab="consult">智能咨询</div>
             <div class="nav-item" data-tab="materials">上传材料</div>
             <div class="nav-item" data-tab="orders">我的工单</div>
+            <div class="nav-item" data-tab="contract">合同审核</div>
         </div>
 
         <div class="main">
@@ -40,8 +41,12 @@
                             placeholder="例如：合同相对方要求第三方付款可以吗？"></textarea>
                     </div>
                     <div class="toolbar">
-                        <button class="btn" onclick="askQuestion()">发送咨询</button>
+                        <label style="font-size:13px;color:var(--text-light);display:flex;align-items:center;gap:6px;cursor:pointer">
+                            <input type="checkbox" id="withMaterials" style="margin:0">
+                            合并已上传材料作为上下文
+                        </label>
                         <div class="spacer"></div>
+                        <button class="btn" onclick="askQuestion()">发送咨询</button>
                         <button class="btn btn-secondary" onclick="closeSession()">仅参考，结束</button>
                         <button class="btn btn-danger" onclick="submitToLegal()">提交法务处理</button>
                     </div>
@@ -78,6 +83,52 @@
                         </thead>
                         <tbody id="ordersBody"></tbody>
                     </table>
+                </div>
+            </div>
+
+            <!-- 合同审核 -->
+            <div id="tab-contract" class="tab-pane hidden">
+                <div class="card">
+                    <div class="card-title">合同审核（六阶段流水线 + 多轮问答）</div>
+                    <p style="color:var(--text-light);font-size:13px;margin-bottom:12px">
+                        上传合同文件后，点击"启动审核"执行六阶段流水线（提取 → 检索 → 业务/法律审查 → 法条核验 → 报告生成），
+                        完成后可下载 Markdown 报告并继续多轮问答。
+                    </p>
+                    <div class="toolbar">
+                        <input type="file" id="contractFile" accept=".txt,.docx,.md" style="flex:1">
+                        <button class="btn" onclick="uploadContract()">上传合同</button>
+                        <button class="btn btn-secondary" onclick="clearContract()">清空</button>
+                    </div>
+                    <div id="contractInfo" style="margin-top:12px"></div>
+                    <div class="form-group" style="margin-top:12px">
+                        <label>特别关注（可选）</label>
+                        <input type="text" id="contractFocus" placeholder="如：违约责任、付款方式、知识产权归属">
+                    </div>
+                    <div class="form-group">
+                        <label>审核立场</label>
+                        <select id="contractStance">
+                            <option value="auto">自动识别</option>
+                            <option value="甲方">甲方（我方）</option>
+                            <option value="乙方">乙方</option>
+                            <option value="中立">中立</option>
+                        </select>
+                    </div>
+                    <div class="toolbar">
+                        <button class="btn" onclick="runContractReview()">启动审核</button>
+                        <button class="btn btn-secondary" id="downloadReportBtn" onclick="downloadReport()" disabled>下载报告</button>
+                        <span id="contractStatus" style="margin-left:auto;color:var(--text-light);font-size:13px"></span>
+                    </div>
+                    <div class="chat-area" id="contractChat" style="margin-top:16px">
+                        <div class="empty">请先上传合同，然后启动审核。</div>
+                    </div>
+                    <div class="form-group">
+                        <textarea id="contractQuestion" rows="3"
+                            placeholder="审核完成后，可在此针对合同细节继续提问（Ctrl+Enter 发送）。"></textarea>
+                    </div>
+                    <div class="toolbar">
+                        <button class="btn" onclick="askContract()">发送追问</button>
+                        <button class="btn btn-secondary" onclick="resetContractChat()">重置对话</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -119,6 +170,7 @@
             const q = input.value.trim();
             if (!q) { toast('请输入问题', 'warning'); return; }
 
+            const withMaterials = document.getElementById('withMaterials').checked;
             const chatArea = document.getElementById('chatArea');
             // 清空空状态
             if (chatArea.querySelector('.empty')) chatArea.innerHTML = '';
@@ -128,16 +180,71 @@
             chatArea.scrollTop = chatArea.scrollHeight;
 
             try {
-                const res = await API.post('/api/business/consult', { question: q });
-                chatArea.innerHTML += `<div class="chat-msg ai"><div class="role">AI 助手</div>${escapeHtml(res.answer)}</div>`;
-                if (res.results && res.results.length) {
-                    let refs = '<div style="margin-top:8px;font-size:12px;color:var(--text-light)">参考条目：</div>';
-                    res.results.forEach(r => {
-                        refs += `<div class="ref-item"><span class="ref-score">${(r.score*100).toFixed(0)}%</span><div class="ref-q">[${r.id}] ${escapeHtml(r.question)}</div></div>`;
+                const res = await API.post('/api/business/consult', {
+                    question: q,
+                    with_materials: withMaterials
+                });
+                // 模式标识（按 relevance + mode 组合显示）
+                const relTag = {
+                    'high': '<span style="color:#16a34a">● 高相关度（知识库+LLM优化，已标注原文）</span>',
+                    'mid':  '<span style="color:#d97706">● 中相关度（参考知识库+LLM）</span>',
+                    'low':  '<span style="color:#6b7280">● 大模型兜底（未用知识库）</span>',
+                    'none': '<span style="color:#6b7280">● 大模型兜底（未用知识库）</span>'
+                }[res.relevance] || '';
+                const modeNote = res.mode === 'rag' && res.relevance !== 'low' && res.relevance !== 'none'
+                    ? '<span style="color:#6b7280;font-size:12px">（LLM未启用，使用知识库原文）</span>'
+                    : '';
+                const disclaimer = res.disclaimer ? `<div style="margin-top:4px;font-size:12px;color:var(--text-light)">${escapeHtml(res.disclaimer)}</div>` : '';
+                let html = `<div class="chat-msg ai"><div class="role">AI 助手</div>${escapeHtml(res.answer)}`;
+                if (relTag) html += `<div style="margin-top:6px;font-size:12px">${relTag}</div>`;
+                if (modeNote) html += `<div style="font-size:12px">${modeNote}</div>`;
+                html += disclaimer;
+                // 知识库来源（可点开+反馈）
+                if (res.sources && res.sources.length) {
+                    html += '<div style="margin-top:8px;font-size:12px;color:var(--text-light)">知识库来源：</div>';
+                    res.sources.forEach(s => {
+                        html += `<div class="ref-item" data-faq-id="${s.id}">
+                            <span class="ref-score">${(s.score*100).toFixed(0)}%</span>
+                            <a href="javascript:void(0)" onclick="viewSource('${s.id}')" style="color:#2563eb">[${s.id}] ${escapeHtml(s.question)}</a>
+                            <span style="margin-left:auto;font-size:12px">
+                                <button class="btn btn-sm" onclick="feedback('${s.id}',true,this)">有关</button>
+                                <button class="btn btn-sm" onclick="feedback('${s.id}',false,this)">无关</button>
+                            </span>
+                        </div>`;
                     });
-                    chatArea.lastChild.innerHTML += refs;
                 }
+                html += '</div>';
+                chatArea.innerHTML += html;
                 chatArea.scrollTop = chatArea.scrollHeight;
+            } catch (e) {
+                toast(e.message, 'error');
+            }
+        }
+
+        async function viewSource(faqId) {
+            try {
+                const item = await API.get(`/api/ai/sources/${faqId}`);
+                let html = `<h3>知识库条目 ${item.id}</h3>`;
+                html += `<p><strong>问题：</strong>${escapeHtml(item.question||'')}</p>`;
+                html += `<p><strong>法律解答：</strong>${escapeHtml(item.legal_answer||'')}</p>`;
+                if (item.compliance_risk) html += `<p><strong>合规风险：</strong>${escapeHtml(item.compliance_risk)}</p>`;
+                if (item.practical_advice) html += `<p><strong>实务建议：</strong>${escapeHtml(item.practical_advice)}</p>`;
+                if (item.legal_basis) html += `<p><strong>法律依据：</strong>${escapeHtml(item.legal_basis)}</p>`;
+                if (item.tags && item.tags.length) html += `<p><strong>标签：</strong>${item.tags.map(escapeHtml).join(', ')}</p>`;
+                showModal(html);
+            } catch (e) {
+                toast(e.message, 'error');
+            }
+        }
+
+        async function feedback(faqId, relevant, btn) {
+            try {
+                await API.post('/api/ai/feedback', { faq_id: faqId, relevant });
+                toast(relevant ? '已标记为"有关"' : '已标记为"无关"', 'success');
+                const parent = btn.closest('.ref-item');
+                if (parent) {
+                    parent.querySelectorAll('button').forEach(b => b.disabled = true);
+                }
             } catch (e) {
                 toast(e.message, 'error');
             }
@@ -222,14 +329,19 @@
                     body.innerHTML = '<tr><td colspan="5" class="empty">暂无工单</td></tr>';
                     return;
                 }
-                body.innerHTML = orders.map(o => `
+                body.innerHTML = orders.map(o => {
+                    const canWithdraw = o.status === 'submitted_to_legal';
+                    const actions = `<button class="btn btn-sm" onclick="viewOrder('${o.id}')">查看</button>`
+                        + (canWithdraw ? ` <button class="btn btn-sm btn-danger" onclick="withdrawOrder('${o.id}')">撤回</button>` : '');
+                    return `
                     <tr>
                         <td>${o.id}</td>
                         <td>${fmtTime(o.submitted_at)}</td>
                         <td>${statusTag(o.status)}</td>
                         <td>${escapeHtml(o.reviewer_name || '-')}</td>
-                        <td><button class="btn btn-sm" onclick="viewOrder('${o.id}')">查看</button></td>
-                    </tr>`).join('');
+                        <td>${actions}</td>
+                    </tr>`;
+                }).join('');
             } catch (e) {
                 toast(e.message, 'error');
             }
@@ -266,9 +378,138 @@
             document.body.appendChild(mask);
         }
 
+        async function withdrawOrder(id) {
+            if (!confirm('确认撤回该工单？撤回后法务将不再处理。')) return;
+            try {
+                await API.post(`/api/business/orders/${id}/withdraw`);
+                toast('已撤回', 'success');
+                loadOrders();
+            } catch (e) {
+                toast(e.message, 'error');
+            }
+        }
+
         // 回车发送
         document.getElementById('questionInput').addEventListener('keydown', e => {
             if (e.ctrlKey && e.key === 'Enter') askQuestion();
+        });
+
+        // ---------- 合同审核 ----------
+        let contractSessionId = '';
+        let contractHistory = [];
+
+        function setContractStatus(text, color = 'var(--text-light)') {
+            const el = document.getElementById('contractStatus');
+            if (el) {
+                el.style.color = color;
+                el.textContent = text;
+            }
+        }
+
+        async function uploadContract() {
+            const input = document.getElementById('contractFile');
+            if (!input.files.length) { toast('请选择合同文件', 'warning'); return; }
+            const fd = new FormData();
+            fd.append('file', input.files[0]);
+            setContractStatus('上传中...');
+            try {
+                const res = await API.upload('/api/file_review/upload', fd);
+                contractSessionId = res.session_id;
+                contractHistory = [];
+                document.getElementById('contractInfo').innerHTML =
+                    `<div style="padding:8px 12px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:4px">
+                        已加载合同：<strong>${escapeHtml(res.filename)}</strong>（${res.char_count} 字）
+                        <div style="margin-top:4px;color:var(--text-light);font-size:12px">预览：${escapeHtml(res.preview)}</div>
+                    </div>`;
+                document.getElementById('contractChat').innerHTML =
+                    '<div class="empty">合同已上传，可填写关注点与立场后点击"启动审核"。</div>';
+                document.getElementById('downloadReportBtn').disabled = true;
+                setContractStatus('就绪，等待启动审核', '#16a34a');
+                toast('合同上传成功', 'success');
+            } catch (e) {
+                setContractStatus('上传失败', '#dc2626');
+                toast(e.message, 'error');
+            }
+        }
+
+        function clearContract() {
+            contractSessionId = '';
+            contractHistory = [];
+            document.getElementById('contractFile').value = '';
+            document.getElementById('contractInfo').innerHTML = '';
+            document.getElementById('downloadReportBtn').disabled = true;
+            setContractStatus('');
+            resetContractChat();
+        }
+
+        function resetContractChat() {
+            contractHistory = [];
+            document.getElementById('contractChat').innerHTML =
+                '<div class="empty">请先上传合同，然后启动审核。</div>';
+        }
+
+        async function runContractReview() {
+            if (!contractSessionId) { toast('请先上传合同', 'warning'); return; }
+            const focus = document.getElementById('contractFocus').value.trim();
+            const stance = document.getElementById('contractStance').value;
+            const chat = document.getElementById('contractChat');
+            chat.innerHTML = '<div class="empty">正在执行六阶段审核，预计需要 30-90 秒，请耐心等待...</div>';
+            setContractStatus('审核中...', '#d97706');
+            document.getElementById('downloadReportBtn').disabled = true;
+
+            try {
+                const res = await API.post('/api/file_review/run', {
+                    session_id: contractSessionId,
+                    special_focus: focus,
+                    user_stance: stance
+                });
+                const report = res.report_full || res.report_preview || '（报告为空）';
+                chat.innerHTML = `<div class="chat-msg ai"><div class="role">审核报告（共 ${res.report_length} 字）</div><pre style="white-space:pre-wrap;font-family:inherit;margin:0">${escapeHtml(report)}</pre></div>`;
+                contractHistory = [];
+                document.getElementById('downloadReportBtn').disabled = false;
+                setContractStatus('审核完成，可下载报告或继续追问', '#16a34a');
+                toast('合同审核完成', 'success');
+            } catch (e) {
+                setContractStatus('审核失败', '#dc2626');
+                chat.innerHTML = `<div class="empty" style="color:#dc2626">审核失败：${escapeHtml(e.message)}</div>`;
+                toast(e.message, 'error');
+            }
+        }
+
+        function downloadReport() {
+            if (!contractSessionId) { toast('无会话', 'warning'); return; }
+            window.open(`/api/file_review/report/${contractSessionId}`, '_blank');
+        }
+
+        async function askContract() {
+            const input = document.getElementById('contractQuestion');
+            const q = input.value.trim();
+            if (!q) { toast('请输入追问内容', 'warning'); return; }
+            if (!contractSessionId) { toast('请先上传合同', 'warning'); return; }
+
+            const chat = document.getElementById('contractChat');
+            if (chat.querySelector('.empty')) chat.innerHTML = '';
+            chat.innerHTML += `<div class="chat-msg user"><div class="role">我</div>${escapeHtml(q)}</div>`;
+            input.value = '';
+            chat.scrollTop = chat.scrollHeight;
+
+            try {
+                const res = await API.post('/api/file_review/chat', {
+                    session_id: contractSessionId,
+                    message: q,
+                    history: contractHistory
+                });
+                chat.innerHTML += `<div class="chat-msg ai"><div class="role">AI 审核专家</div>${escapeHtml(res.answer)}</div>`;
+                contractHistory.push({ role: 'user', content: q });
+                contractHistory.push({ role: 'assistant', content: res.answer });
+                chat.scrollTop = chat.scrollHeight;
+            } catch (e) {
+                toast(e.message, 'error');
+            }
+        }
+
+        document.getElementById('contractQuestion').addEventListener('keydown', e => {
+            if (e.ctrlKey && e.key === 'Enter') askContract();
         });
     </script>
 </body>
