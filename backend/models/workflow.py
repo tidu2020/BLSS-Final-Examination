@@ -164,9 +164,48 @@ class WorkOrder:
         self.confirmed_faqs = faqs
         self.confirmed_at = datetime.now().isoformat(timespec="seconds")
         self.status = "confirmed"
+        # 业务尚未阅读法务结论
+        self.business_read_at: str = ""
+        self.business_confirmed_at: str = ""
+
+    def mark_business_read(self) -> None:
+        """业务查看工单详情时标记已读（用于判断法务是否还能撤回）。"""
+        self.business_read_at = datetime.now().isoformat(timespec="seconds")
+
+    def business_confirm(self) -> None:
+        """业务确认法务审核结果（归档前置条件）。"""
+        if self.status != "confirmed":
+            raise RuntimeError(f"工单状态 {self.status} 不可确认")
+        self.business_confirmed_at = datetime.now().isoformat(timespec="seconds")
+
+    def business_ask_more(self, question: str) -> None:
+        """业务提出新问题，工单回到 reviewing 状态。"""
+        if self.status != "confirmed":
+            raise RuntimeError(f"工单状态 {self.status} 不可追加问题")
+        self.dialogue.append({"role": "user", "content": question,
+                              "time": datetime.now().isoformat(timespec="seconds")})
+        self.status = "reviewing"
+        self.business_read_at = ""
+        self.business_confirmed_at = ""
+        self.confirmed_at = ""
+
+    def withdraw_after_confirm(self) -> None:
+        """法务撤回已确认的审核结论（仅业务未读前可撤回）。
+
+        撤回后工单回到 reviewing 状态，法务结论保留但不通知业务。
+        """
+        if self.status not in ("confirmed",):
+            raise RuntimeError(f"工单状态 {self.status} 不可撤回")
+        if getattr(self, "business_read_at", ""):
+            raise RuntimeError("业务已查看审核结论，不可撤回")
+        self.status = "reviewing"
+        # 保留 legal_conclusion 和 confirmed_faqs，但清空确认时间
+        self.confirmed_at = ""
 
     def archive(self) -> None:
-        """归档完成。"""
+        """归档完成。需业务已确认（business_confirmed_at 有值）。"""
+        if not getattr(self, "business_confirmed_at", ""):
+            raise RuntimeError("业务尚未确认审核结果，不可归档")
         self.status = "archived"
 
     def withdraw(self) -> None:
@@ -213,6 +252,8 @@ class WorkOrder:
             # 状态
             "status": self.status,
             "archive_reject_reason": getattr(self, "archive_reject_reason", ""),
+            "business_read_at": getattr(self, "business_read_at", ""),
+            "business_confirmed_at": getattr(self, "business_confirmed_at", ""),
         }
 
     @classmethod
@@ -237,6 +278,8 @@ class WorkOrder:
         order.confirmed_faqs = data.get("confirmed_faqs", [])
         order.status = data.get("status", "submitted_to_legal")
         order.archive_reject_reason = data.get("archive_reject_reason", "")
+        order.business_read_at = data.get("business_read_at", "")
+        order.business_confirmed_at = data.get("business_confirmed_at", "")
         return order
 
 

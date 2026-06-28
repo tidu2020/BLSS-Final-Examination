@@ -3,12 +3,21 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>业务工作台 · 智能法务系统</title>
+    <title>业务工作台 · 业法协同系统</title>
     <link rel="stylesheet" href="/static/style.css">
+    <style>
+        .mode-toggle { display:flex; gap:0; border:1px solid var(--border); border-radius:6px; overflow:hidden; margin-bottom:12px; }
+        .mode-toggle button { flex:1; padding:10px 16px; border:none; background:#f5f5f5; cursor:pointer; font-size:14px; transition:all .2s; }
+        .mode-toggle button.active { background:var(--primary,#2563eb); color:#fff; }
+        .upload-inline { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
+        .upload-inline input[type=file] { flex:1; font-size:13px; }
+        .material-chips { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
+        .material-chip { background:#e0f2fe; border:1px solid #bae6fd; border-radius:12px; padding:2px 10px; font-size:12px; color:#0369a1; }
+    </style>
 </head>
 <body>
     <div class="topbar">
-        <div class="brand">智能法务系统 <span class="sub">业务工作台</span></div>
+        <div class="brand">业法协同系统 <span class="sub">业务工作台</span></div>
         <div class="user-info">
             <span id="userName"></span>
             <span class="role-tag">业务</span>
@@ -18,59 +27,13 @@
 
     <div class="layout">
         <div class="sidebar">
-            <div class="nav-item active" data-tab="consult">智能咨询</div>
-            <div class="nav-item" data-tab="materials">上传材料</div>
-            <div class="nav-item" data-tab="orders">我的工单</div>
-            <div class="nav-item" data-tab="contract">合同审核</div>
+            <div class="nav-item active" data-tab="orders">我的工单</div>
+            <div class="nav-item" data-tab="assistant">智能助手</div>
         </div>
 
         <div class="main">
-            <!-- 智能咨询 -->
-            <div id="tab-consult" class="tab-pane">
-                <div class="card">
-                    <div class="card-title">智能法律咨询</div>
-                    <p style="color:var(--text-light);font-size:13px;margin-bottom:12px">
-                        输入您遇到的法律问题，AI 将基于知识库给出参考意见。
-                        如需正式法律意见，请点击"提交法务处理"。
-                    </p>
-                    <div class="chat-area" id="chatArea">
-                        <div class="empty">暂无对话。请在下方输入问题开始咨询。</div>
-                    </div>
-                    <div class="form-group">
-                        <textarea id="questionInput" rows="3"
-                            placeholder="例如：合同相对方要求第三方付款可以吗？"></textarea>
-                    </div>
-                    <div class="toolbar">
-                        <label style="font-size:13px;color:var(--text-light);display:flex;align-items:center;gap:6px;cursor:pointer">
-                            <input type="checkbox" id="withMaterials" style="margin:0">
-                            合并已上传材料作为上下文
-                        </label>
-                        <div class="spacer"></div>
-                        <button class="btn" onclick="askQuestion()">发送咨询</button>
-                        <button class="btn btn-secondary" onclick="closeSession()">仅参考，结束</button>
-                        <button class="btn btn-danger" onclick="submitToLegal()">提交法务处理</button>
-                    </div>
-                </div>
-            </div>
-
-            <!-- 上传材料 -->
-            <div id="tab-materials" class="tab-pane hidden">
-                <div class="card">
-                    <div class="card-title">上传材料文件</div>
-                    <p style="color:var(--text-light);font-size:13px;margin-bottom:12px">
-                        支持合同、对外函件、采购文件、上会议题等文档（.txt / .docx / .md）。
-                        上传后材料会附加到当前咨询会话，随工单一并提交法务。
-                    </p>
-                    <input type="file" id="fileInput" accept=".txt,.docx,.md">
-                    <div class="toolbar" style="margin-top:12px">
-                        <button class="btn" onclick="uploadFile()">上传</button>
-                    </div>
-                    <div id="materialList" style="margin-top:16px"></div>
-                </div>
-            </div>
-
-            <!-- 我的工单 -->
-            <div id="tab-orders" class="tab-pane hidden">
+            <!-- 我的工单（侧栏第一位） -->
+            <div id="tab-orders" class="tab-pane">
                 <div class="card">
                     <div class="card-title">我提交的工单</div>
                     <table id="ordersTable">
@@ -86,48 +49,89 @@
                 </div>
             </div>
 
-            <!-- 合同审核 -->
-            <div id="tab-contract" class="tab-pane hidden">
+            <!-- 智能助手（咨询模式 + 合同审核模式合并） -->
+            <div id="tab-assistant" class="tab-pane hidden">
                 <div class="card">
-                    <div class="card-title">合同审核（六阶段流水线 + 多轮问答）</div>
+                    <div class="card-title">智能助手</div>
                     <p style="color:var(--text-light);font-size:13px;margin-bottom:12px">
-                        上传合同文件后，点击"启动审核"执行六阶段流水线（提取 → 检索 → 业务/法律审查 → 法条核验 → 报告生成），
-                        完成后可下载 Markdown 报告并继续多轮问答。
+                        咨询模式：提问 + 可选上传材料作为辅助上下文；
+                        合同审核模式：上传合同文件，执行六阶段审核并生成报告。
                     </p>
-                    <div class="toolbar">
-                        <input type="file" id="contractFile" accept=".txt,.docx,.md" style="flex:1">
-                        <button class="btn" onclick="uploadContract()">上传合同</button>
-                        <button class="btn btn-secondary" onclick="clearContract()">清空</button>
+
+                    <!-- 模式切换 -->
+                    <div class="mode-toggle">
+                        <button id="modeConsult" class="active" onclick="switchMode('consult')">咨询模式</button>
+                        <button id="modeContract" onclick="switchMode('contract')">合同审核模式</button>
                     </div>
-                    <div id="contractInfo" style="margin-top:12px"></div>
-                    <div class="form-group" style="margin-top:12px">
-                        <label>特别关注（可选）</label>
-                        <input type="text" id="contractFocus" placeholder="如：违约责任、付款方式、知识产权归属">
+
+                    <!-- 咨询模式 -->
+                    <div id="paneConsult">
+                        <div class="chat-area" id="chatArea">
+                            <div class="empty">暂无对话。请在下方输入问题开始咨询。</div>
+                        </div>
+                        <div class="form-group">
+                            <textarea id="questionInput" rows="3"
+                                placeholder="例如：合同相对方要求第三方付款可以吗？（Ctrl+Enter 发送）"></textarea>
+                        </div>
+                        <!-- 内联上传材料 -->
+                        <div class="upload-inline">
+                            <input type="file" id="fileInput" accept=".txt,.docx,.md">
+                            <button class="btn btn-secondary btn-sm" onclick="uploadFile()">上传辅助材料</button>
+                            <label style="font-size:13px;color:var(--text-light);display:flex;align-items:center;gap:6px;cursor:pointer">
+                                <input type="checkbox" id="withMaterials" style="margin:0">
+                                合并已上传材料作为上下文
+                            </label>
+                        </div>
+                        <div class="material-chips" id="materialChips"></div>
+                        <div class="toolbar">
+                            <div class="spacer"></div>
+                            <button class="btn" onclick="askQuestion()">发送咨询</button>
+                            <button class="btn btn-secondary" onclick="closeSession()">仅参考，结束</button>
+                            <button class="btn btn-danger" onclick="submitToLegal()">提交法务处理</button>
+                        </div>
                     </div>
-                    <div class="form-group">
-                        <label>审核立场</label>
-                        <select id="contractStance">
-                            <option value="auto">自动识别</option>
-                            <option value="甲方">甲方（我方）</option>
-                            <option value="乙方">乙方</option>
-                            <option value="中立">中立</option>
-                        </select>
-                    </div>
-                    <div class="toolbar">
-                        <button class="btn" onclick="runContractReview()">启动审核</button>
-                        <button class="btn btn-secondary" id="downloadReportBtn" onclick="downloadReport()" disabled>下载报告</button>
-                        <span id="contractStatus" style="margin-left:auto;color:var(--text-light);font-size:13px"></span>
-                    </div>
-                    <div class="chat-area" id="contractChat" style="margin-top:16px">
-                        <div class="empty">请先上传合同，然后启动审核。</div>
-                    </div>
-                    <div class="form-group">
-                        <textarea id="contractQuestion" rows="3"
-                            placeholder="审核完成后，可在此针对合同细节继续提问（Ctrl+Enter 发送）。"></textarea>
-                    </div>
-                    <div class="toolbar">
-                        <button class="btn" onclick="askContract()">发送追问</button>
-                        <button class="btn btn-secondary" onclick="resetContractChat()">重置对话</button>
+
+                    <!-- 合同审核模式 -->
+                    <div id="paneContract" style="display:none">
+                        <p style="color:var(--text-light);font-size:13px;margin-bottom:8px">
+                            上传合同文件后，点击"启动审核"执行六阶段流水线（提取 → 检索 → 业务/法律审查 → 法条核验 → 报告生成），
+                            完成后可下载 Markdown 报告并继续多轮问答。
+                        </p>
+                        <div class="toolbar">
+                            <input type="file" id="contractFile" accept=".txt,.docx,.md" style="flex:1">
+                            <button class="btn" onclick="uploadContract()">上传合同</button>
+                            <button class="btn btn-secondary" onclick="clearContract()">清空</button>
+                        </div>
+                        <div id="contractInfo" style="margin-top:12px"></div>
+                        <div class="form-group" style="margin-top:12px">
+                            <label>特别关注（可选）</label>
+                            <input type="text" id="contractFocus" placeholder="如：违约责任、付款方式、知识产权归属">
+                        </div>
+                        <div class="form-group">
+                            <label>审核立场</label>
+                            <select id="contractStance">
+                                <option value="auto">自动识别</option>
+                                <option value="甲方">甲方</option>
+                                <option value="乙方">乙方</option>
+                                <option value="中立">中立</option>
+                            </select>
+                        </div>
+                        <div class="toolbar">
+                            <button class="btn" onclick="runContractReview()">启动审核</button>
+                            <button class="btn btn-secondary" id="downloadReportBtn" onclick="downloadReport()" disabled>下载报告</button>
+                            <span id="contractStatus" style="margin-left:auto;color:var(--text-light);font-size:13px"></span>
+                        </div>
+                        <div class="chat-area" id="contractChat" style="margin-top:16px">
+                            <div class="empty">请先上传合同，然后启动审核。</div>
+                        </div>
+                        <div class="form-group">
+                            <textarea id="contractQuestion" rows="3"
+                                placeholder="审核完成后，可在此针对合同细节继续提问（Ctrl+Enter 发送）。"></textarea>
+                        </div>
+                        <div class="toolbar">
+                            <button class="btn" onclick="askContract()">发送追问</button>
+                            <button class="btn btn-secondary" onclick="resetContractChat()">重置对话</button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -146,12 +150,11 @@
                 return;
             }
             document.getElementById('userName').textContent = currentUser.name;
-            // 侧边栏切换
             document.querySelectorAll('.nav-item').forEach(item => {
                 item.onclick = () => switchTab(item.dataset.tab);
             });
-            loadSession();
             loadOrders();
+            loadSession();
         })();
 
         function switchTab(tab) {
@@ -161,7 +164,16 @@
                 p.classList.add('hidden'));
             document.getElementById('tab-' + tab).classList.remove('hidden');
             if (tab === 'orders') loadOrders();
-            if (tab === 'materials') loadSession();
+            if (tab === 'assistant') loadSession();
+        }
+
+        // ---------- 模式切换 ----------
+        function switchMode(mode) {
+            const isConsult = mode === 'consult';
+            document.getElementById('modeConsult').classList.toggle('active', isConsult);
+            document.getElementById('modeContract').classList.toggle('active', !isConsult);
+            document.getElementById('paneConsult').style.display = isConsult ? '' : 'none';
+            document.getElementById('paneContract').style.display = isConsult ? 'none' : '';
         }
 
         // ---------- 智能咨询 ----------
@@ -172,9 +184,7 @@
 
             const withMaterials = document.getElementById('withMaterials').checked;
             const chatArea = document.getElementById('chatArea');
-            // 清空空状态
             if (chatArea.querySelector('.empty')) chatArea.innerHTML = '';
-            // 渲染用户问题
             chatArea.innerHTML += `<div class="chat-msg user"><div class="role">我</div>${escapeHtml(q)}</div>`;
             input.value = '';
             chatArea.scrollTop = chatArea.scrollHeight;
@@ -184,7 +194,6 @@
                     question: q,
                     with_materials: withMaterials
                 });
-                // 模式标识（按 relevance + mode 组合显示）
                 const relTag = {
                     'high': '<span style="color:#16a34a">● 高相关度（知识库+LLM优化，已标注原文）</span>',
                     'mid':  '<span style="color:#d97706">● 中相关度（参考知识库+LLM）</span>',
@@ -199,7 +208,6 @@
                 if (relTag) html += `<div style="margin-top:6px;font-size:12px">${relTag}</div>`;
                 if (modeNote) html += `<div style="font-size:12px">${modeNote}</div>`;
                 html += disclaimer;
-                // 知识库来源（可点开+反馈）
                 if (res.sources && res.sources.length) {
                     html += '<div style="margin-top:8px;font-size:12px;color:var(--text-light)">知识库来源：</div>';
                     res.sources.forEach(s => {
@@ -256,28 +264,27 @@
                 const chatArea = document.getElementById('chatArea');
                 if (!s.dialogue || s.dialogue.length === 0) {
                     chatArea.innerHTML = '<div class="empty">暂无对话。请在上方输入问题开始咨询。</div>';
-                    return;
+                } else {
+                    chatArea.innerHTML = s.dialogue.map(d => {
+                        const role = { user: '我', ai: 'AI 助手' }[d.role] || d.role;
+                        const cls = d.role === 'user' ? 'user' : 'ai';
+                        return `<div class="chat-msg ${cls}"><div class="role">${role}</div>${escapeHtml(d.content)}</div>`;
+                    }).join('');
+                    chatArea.scrollTop = chatArea.scrollHeight;
                 }
-                chatArea.innerHTML = s.dialogue.map(d => {
-                    const role = { user: '我', ai: 'AI 助手' }[d.role] || d.role;
-                    const cls = d.role === 'user' ? 'user' : 'ai';
-                    return `<div class="chat-msg ${cls}"><div class="role">${role}</div>${escapeHtml(d.content)}</div>`;
-                }).join('');
-                chatArea.scrollTop = chatArea.scrollHeight;
-                // 渲染材料列表
                 renderMaterials(s.materials || []);
             } catch { /* 无活跃会话，忽略 */ }
         }
 
         function renderMaterials(materials) {
-            const el = document.getElementById('materialList');
+            const el = document.getElementById('materialChips');
             if (!materials.length) {
-                el.innerHTML = '<div class="empty">暂无上传材料</div>';
+                el.innerHTML = '';
                 return;
             }
-            el.innerHTML = '<table><thead><tr><th>文件名</th><th>大小</th></tr></thead><tbody>' +
-                materials.map(m => `<tr><td>${escapeHtml(m.filename)}</td><td>${m.size} 字</td></tr>`).join('') +
-                '</tbody></table>';
+            el.innerHTML = materials.map(m =>
+                `<span class="material-chip" title="${escapeHtml(m.filename)}">${escapeHtml(m.filename)} (${m.size}字)</span>`
+            ).join('');
         }
 
         async function uploadFile() {
@@ -298,7 +305,6 @@
         async function closeSession() {
             if (!confirm('确认结束本次咨询？结束后需重新提问。')) return;
             try {
-                // 获取当前会话 id
                 const s = await API.get('/api/business/session');
                 await API.post(`/api/business/sessions/${s.id}/close`);
                 toast('已结束会话');
@@ -355,6 +361,16 @@
                 html += `<p><strong>提交时间：</strong>${fmtTime(o.submitted_at)}</p>`;
                 if (o.reviewer_name) html += `<p><strong>法务审核人：</strong>${escapeHtml(o.reviewer_name)}</p>`;
                 html += `<p><strong>材料数：</strong>${o.materials.length} 份</p>`;
+                // 已读/已确认状态展示
+                if (o.status === 'confirmed') {
+                    if (o.business_confirmed_at) {
+                        html += '<div class="disclaimer" style="background:#d1fae5;color:#065f46">您已确认审核结果，等待法务归档。</div>';
+                    } else if (o.business_read_at) {
+                        html += `<div class="disclaimer" style="background:#fef3c7;color:#92400e">已读（${fmtTime(o.business_read_at)}），请确认审核结果或提出新问题。</div>`;
+                    } else {
+                        html += '<div class="disclaimer" style="background:#dbeafe;color:#1e40af">法务已反馈，请查看下方结论并确认或追加问题。</div>';
+                    }
+                }
                 html += '<h4 style="margin-top:16px">咨询对话</h4>';
                 o.dialogue.forEach(d => {
                     const role = { user: '业务', ai: 'AI', legal: '法务' }[d.role] || d.role;
@@ -364,18 +380,64 @@
                     html += '<h4 style="margin-top:16px">法务结论</h4>';
                     html += `<div class="chat-msg ai">${escapeHtml(o.legal_conclusion)}</div>`;
                 }
+                // 业务确认/提新问题按钮（仅 confirmed 且未确认时）
+                if (o.status === 'confirmed' && !o.business_confirmed_at) {
+                    html += '<h4 style="margin-top:16px">操作</h4>';
+                    html += `<div class="toolbar">
+                        <button class="btn" onclick="businessConfirmOrder('${o.id}')">确认审核结果</button>
+                        <button class="btn btn-secondary" onclick="showAskMoreBox('${o.id}')">提出新问题</button>
+                    </div>`;
+                    html += `<div id="askMoreBox" style="display:none;margin-top:8px">
+                        <textarea id="askMoreQ" rows="3" placeholder="请输入追加的问题..." style="width:100%"></textarea>
+                        <div class="toolbar" style="margin-top:4px">
+                            <button class="btn btn-sm" onclick="businessAskMore('${o.id}')">提交新问题</button>
+                            <button class="btn btn-sm btn-secondary" onclick="document.getElementById('askMoreBox').style.display='none'">取消</button>
+                        </div>
+                    </div>`;
+                }
                 showModal(html);
             } catch (e) {
                 toast(e.message, 'error');
             }
         }
 
+        async function businessConfirmOrder(id) {
+            if (!confirm('确认审核结果？确认后法务可归档，您将无法再追加问题。')) return;
+            try {
+                await API.post(`/api/business/orders/${id}/confirm`);
+                toast('已确认审核结果', 'success');
+                closeModal();
+                loadOrders();
+            } catch (e) { toast(e.message, 'error'); }
+        }
+
+        function showAskMoreBox(id) {
+            document.getElementById('askMoreBox').style.display = 'block';
+            document.getElementById('askMoreQ').focus();
+        }
+
+        async function businessAskMore(id) {
+            const q = document.getElementById('askMoreQ').value.trim();
+            if (!q) { toast('请输入问题', 'warning'); return; }
+            try {
+                await API.post(`/api/business/orders/${id}/ask_more`, { question: q });
+                toast('已提交新问题，工单回到审核中', 'success');
+                closeModal();
+                loadOrders();
+            } catch (e) { toast(e.message, 'error'); }
+        }
+
         function showModal(html) {
             const mask = document.createElement('div');
             mask.className = 'modal-mask';
-            mask.innerHTML = `<div class="modal">${html}<div style="margin-top:16px;text-align:right"><button class="btn" onclick="this.closest('.modal-mask').remove()">关闭</button></div></div>`;
+            mask.innerHTML = `<div class="modal">${html}<div style="margin-top:16px;text-align:right"><button class="btn" onclick="closeModal()">关闭</button></div></div>`;
             mask.onclick = e => { if (e.target === mask) mask.remove(); };
             document.body.appendChild(mask);
+        }
+
+        function closeModal() {
+            const mask = document.querySelector('.modal-mask');
+            if (mask) mask.remove();
         }
 
         async function withdrawOrder(id) {

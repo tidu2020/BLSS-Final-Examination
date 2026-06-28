@@ -3,12 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>管理工作台 · 智能法务系统</title>
+    <title>管理工作台 · 业法协同系统</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
     <div class="topbar">
-        <div class="brand">智能法务系统 <span class="sub">管理工作台</span></div>
+        <div class="brand">业法协同系统 <span class="sub">管理工作台</span></div>
         <div class="user-info">
             <span id="userName"></span>
             <span class="role-tag" style="background:#c0392b">管理员</span>
@@ -22,6 +22,7 @@
             <div class="nav-item" data-tab="kb">知识库管理</div>
             <div class="nav-item" data-tab="similar">相似合并</div>
             <div class="nav-item" data-tab="approvals">修改申请</div>
+            <div class="nav-item" data-tab="kbSubmit">入库申请</div>
             <div class="nav-item" data-tab="orders">全部工单</div>
             <div class="nav-item" data-tab="archive">归档管理</div>
             <div class="nav-item" data-tab="accounts">账户管理</div>
@@ -42,14 +43,14 @@
                     <div class="card-title">知识库管理</div>
                     <div class="toolbar">
                         <input type="text" id="kbSearch" placeholder="搜索问题或解答"
-                            style="flex:1" onkeydown="if(event.key==='Enter')loadKb()">
-                        <select id="kbMonth" onchange="loadKb()">
+                            style="flex:1" onkeydown="if(event.key==='Enter')loadKb(true)">
+                        <select id="kbMonth" onchange="loadKb(true)">
                             <option value="">全部月份</option>
                         </select>
-                        <select id="kbCategory" onchange="loadKb()">
+                        <select id="kbCategory" onchange="loadKb(true)">
                             <option value="">全部分类</option>
                         </select>
-                        <button class="btn" onclick="loadKb()">查询</button>
+                        <button class="btn" onclick="loadKb(true)">查询</button>
                         <button class="btn btn-secondary" onclick="showAddItem()">新增条目</button>
                         <button class="btn btn-secondary" onclick="rebuildIndex()">重建索引</button>
                     </div>
@@ -60,6 +61,7 @@
                         </tr></thead>
                         <tbody id="kbBody"></tbody>
                     </table>
+                    <div id="kbPager" style="margin-top:12px;display:flex;gap:8px;justify-content:center;align-items:center"></div>
                 </div>
             </div>
 
@@ -68,16 +70,20 @@
                 <div class="card">
                     <div class="card-title">相似知识合并</div>
                     <p style="color:var(--text-light);font-size:13px;margin-bottom:12px">
-                        选择一条知识，系统会列出相似条目（相似度≥50%），可发起合并申请。
-                        合并需法务确认后生效。
+                        点击扫描识别全库相似对（相似度≥60%），可调用 LLM 生成合并建议稿，
+                        管理员修改确认后提交合并申请，待法务确认后生效。拒绝的合并对不再提示。
                     </p>
                     <div class="toolbar">
-                        <input type="text" id="simItemQ" placeholder="输入知识条目 ID 或问题关键词"
-                            style="flex:1" onkeydown="if(event.key==='Enter')loadKbForSimilar()">
-                        <button class="btn" onclick="loadKbForSimilar()">查找条目</button>
+                        <button class="btn" onclick="autoScanSimilarPairs('active')">扫描（排除已拒绝）</button>
+                        <button class="btn btn-secondary" onclick="autoScanSimilarPairs('all')">全量扫描</button>
+                        <span style="color:var(--text-light);font-size:13px;align-self:center" id="simScanHint"></span>
                     </div>
-                    <div id="simKbList" style="margin-top:16px"></div>
-                    <div id="simResult" style="margin-top:16px"></div>
+                    <div id="simPairsList" style="margin-top:16px"></div>
+                    <h4 style="margin-top:24px;color:var(--text-light)">已拒绝的合并对</h4>
+                    <p style="font-size:12px;color:var(--text-light);margin:4px 0 8px">
+                        拒绝后该对在"排除已拒绝"扫描中不再提示。点击"恢复"可重新纳入扫描。
+                    </p>
+                    <div id="simRejectionsList" style="margin-top:8px"></div>
                 </div>
             </div>
 
@@ -94,6 +100,25 @@
                         </select>
                     </div>
                     <div id="apprList" style="margin-top:16px"></div>
+                </div>
+            </div>
+
+            <!-- 入库申请审批 -->
+            <div id="tab-kbSubmit" class="tab-pane hidden">
+                <div class="card">
+                    <div class="card-title">归档入库申请审批</div>
+                    <p style="color:var(--text-light);font-size:13px;margin-bottom:12px">
+                        法务归档时由 LLM 自动总结的 FAQ 条目，需管理员确认后才能正式入库。
+                    </p>
+                    <div class="toolbar">
+                        <select id="kbSubmitStatus" onchange="loadKbSubmitRequests()">
+                            <option value="pending">待审批</option>
+                            <option value="approved">已批准</option>
+                            <option value="rejected">已驳回</option>
+                            <option value="">全部</option>
+                        </select>
+                    </div>
+                    <div id="kbSubmitList" style="margin-top:16px"></div>
                 </div>
             </div>
 
@@ -183,7 +208,9 @@
             if (tab === 'accounts') loadAccounts();
             if (tab === 'dashboard') loadStats();
             if (tab === 'approvals') loadEditRequests();
+            if (tab === 'kbSubmit') loadKbSubmitRequests();
             if (tab === 'archive') loadArchive();
+            if (tab === 'similar') { autoScanSimilarPairs('active'); }
         }
 
         // ---------- 仪表盘 ----------
@@ -199,11 +226,16 @@
         }
 
         // ---------- 知识库 ----------
-        async function loadKb() {
+        let kbPage = 0;
+        const KB_PAGE_SIZE = 30;
+
+        async function loadKb(resetPage) {
+            if (resetPage) kbPage = 0;
             const q = document.getElementById('kbSearch').value.trim();
             const month = document.getElementById('kbMonth').value;
             const category = document.getElementById('kbCategory').value;
-            let url = '/api/kb/items?limit=50';
+            const offset = kbPage * KB_PAGE_SIZE;
+            let url = `/api/kb/items?limit=${KB_PAGE_SIZE}&offset=${offset}`;
             if (q) url += `&q=${encodeURIComponent(q)}`;
             if (month) url += `&month=${month}`;
             if (category) url += `&category=${encodeURIComponent(category)}`;
@@ -227,8 +259,10 @@
 
                 const res = await API.get(url);
                 const body = document.getElementById('kbBody');
+                const total = res.total || 0;
                 if (!res.items.length) {
                     body.innerHTML = '<tr><td colspan="6" class="empty">暂无数据</td></tr>';
+                    document.getElementById('kbPager').innerHTML = '';
                     return;
                 }
                 body.innerHTML = res.items.map(it => `
@@ -243,6 +277,14 @@
                             <button class="btn btn-sm btn-danger" onclick="deleteItem('${it.id}')">删除</button>
                         </td>
                     </tr>`).join('');
+                // 分页器
+                const totalPages = Math.ceil(total / KB_PAGE_SIZE) || 1;
+                const pager = document.getElementById('kbPager');
+                pager.innerHTML = `
+                    <button class="btn btn-sm" ${kbPage === 0 ? 'disabled' : ''} onclick="kbPage--;loadKb()">上一页</button>
+                    <span style="font-size:13px;color:var(--text-light)">第 ${kbPage + 1} / ${totalPages} 页（共 ${total} 条）</span>
+                    <button class="btn btn-sm" ${kbPage + 1 >= totalPages ? 'disabled' : ''} onclick="kbPage++;loadKb()">下一页</button>
+                `;
             } catch (e) { toast(e.message, 'error'); }
         }
 
@@ -432,54 +474,219 @@
             } catch (e) { toast(e.message, 'error'); }
         }
 
-        // ---------- A4：相似知识合并 ----------
-        async function loadKbForSimilar() {
-            const q = document.getElementById('simItemQ').value.trim();
-            let url = '/api/kb/items?limit=30';
-            if (q) url += `&q=${encodeURIComponent(q)}`;
+        // ---------- A4：相似知识合并（自动扫描+LLM建议稿+可修改+提交） ----------
+        async function autoScanSimilarPairs(scope) {
+            scope = scope || 'active';
+            const hint = document.getElementById('simScanHint');
+            const el = document.getElementById('simPairsList');
+            hint.textContent = '扫描中...';
+            el.innerHTML = '<div class="empty">正在扫描全库相似对...</div>';
             try {
-                const res = await API.get(url);
-                const el = document.getElementById('simKbList');
-                if (!res.items.length) {
-                    el.innerHTML = '<div class="empty">暂无条目</div>';
+                const res = await API.get(`/api/kb/similar_pairs?scope=${scope}`);
+                const label = scope === 'all' ? '（含已拒绝）' : '（排除已拒绝）';
+                hint.textContent = `共发现 ${res.count} 对相似条目 ${label}`;
+                if (!res.pairs || !res.pairs.length) {
+                    el.innerHTML = '<div class="empty">未发现相似对（相似度<60%）</div>';
                     return;
                 }
-                el.innerHTML = res.items.map(it => `
-                    <div class="ref-item">
-                        <div class="ref-q">[${it.id}] ${escapeHtml(it.question)}</div>
-                        <button class="btn btn-sm" onclick="findSimilar('${it.id}')">查找相似</button>
+                el.innerHTML = res.pairs.map((p, idx) => `
+                    <div class="ref-item" style="flex-direction:column;align-items:stretch;padding:12px">
+                        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+                            <span class="ref-score">${(p.score*100).toFixed(0)}%</span>
+                            <strong>相似对 #${idx + 1}</strong>
+                            <span style="margin-left:auto;font-size:12px;color:var(--text-light)">建议保留 A，合并 B</span>
+                        </div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:13px">
+                            <div style="background:#f0f9ff;padding:8px;border-radius:4px;border-left:3px solid #2563eb">
+                                <div><strong>[A ${p.a.id}]</strong></div>
+                                <div style="margin-top:4px">${escapeHtml(p.a.question)}</div>
+                                <div style="font-size:12px;color:var(--text-light);margin-top:4px">${escapeHtml((p.a.legal_answer||'').slice(0,80))}...</div>
+                                <div style="font-size:11px;color:var(--text-light);margin-top:4px">分类：${escapeHtml(p.a.category||'-')}</div>
+                            </div>
+                            <div style="background:#fef3c7;padding:8px;border-radius:4px;border-left:3px solid #d97706">
+                                <div><strong>[B ${p.b.id}]</strong></div>
+                                <div style="margin-top:4px">${escapeHtml(p.b.question)}</div>
+                                <div style="font-size:12px;color:var(--text-light);margin-top:4px">${escapeHtml((p.b.legal_answer||'').slice(0,80))}...</div>
+                                <div style="font-size:11px;color:var(--text-light);margin-top:4px">分类：${escapeHtml(p.b.category||'-')}</div>
+                            </div>
+                        </div>
+                        <div class="toolbar" style="margin-top:8px">
+                            <button class="btn btn-sm" onclick="generateMergeDraft('${p.a.id}','${p.b.id}')">生成合并建议稿（保留A）</button>
+                            <button class="btn btn-sm" onclick="generateMergeDraft('${p.b.id}','${p.a.id}')">生成合并建议稿（保留B）</button>
+                            <button class="btn btn-sm btn-danger" onclick="rejectMergePair('${p.a.id}','${p.b.id}')">拒绝合并</button>
+                        </div>
+                    </div>`).join('');
+                // 同时加载已拒绝列表
+                loadMergeRejections();
+            } catch (e) { toast(e.message, 'error'); el.innerHTML = ''; hint.textContent = ''; }
+        }
+
+        async function rejectMergePair(aId, bId) {
+            const reason = prompt(`确认拒绝此合并对？\n[A ${aId}] & [B ${bId}]\n可填写拒绝原因（可选）：`) || '';
+            if (reason === null) return;  // 用户取消
+            try {
+                await API.post('/api/kb/merge_rejections', { a_id: aId, b_id: bId, reason: reason.trim() });
+                toast('已拒绝，该对在"排除已拒绝"扫描中不再提示', 'success');
+                // 重新扫描（保持 active 范围）
+                autoScanSimilarPairs('active');
+            } catch (e) { toast(e.message, 'error'); }
+        }
+
+        async function loadMergeRejections() {
+            const el = document.getElementById('simRejectionsList');
+            if (!el) return;
+            try {
+                const res = await API.get('/api/kb/merge_rejections');
+                if (!res.rejections || !res.rejections.length) {
+                    el.innerHTML = '<p class="empty" style="margin:4px 0">暂无已拒绝的合并对</p>';
+                    return;
+                }
+                el.innerHTML = res.rejections.map(r => `
+                    <div class="ref-item" style="padding:8px;flex-direction:row;align-items:center;gap:8px">
+                        <span class="ref-score" style="background:#fee2e2;color:#991b1b">已拒绝</span>
+                        <div style="flex:1;font-size:13px">
+                            <div><strong>[${escapeHtml(r.a_id)}]</strong> ${escapeHtml((r.a_question||'').slice(0,40))}...</div>
+                            <div><strong>[${escapeHtml(r.b_id)}]</strong> ${escapeHtml((r.b_question||'').slice(0,40))}...</div>
+                            <div style="font-size:11px;color:var(--text-light);margin-top:2px">${escapeHtml(r.rejected_at)} ${r.reason ? '· ' + escapeHtml(r.reason) : ''}</div>
+                        </div>
+                        <button class="btn btn-sm" onclick="restoreMergeRejection('${escapeHtml(r.key)}')">恢复</button>
                     </div>`).join('');
             } catch (e) { toast(e.message, 'error'); }
         }
 
-        async function findSimilar(itemId) {
+        async function restoreMergeRejection(key) {
+            if (!confirm('恢复该合并对？恢复后将在"排除已拒绝"扫描中重新出现。')) return;
             try {
-                const res = await API.get(`/api/kb/items/${itemId}/similar`);
-                const el = document.getElementById('simResult');
-                if (!res.can_merge) {
-                    el.innerHTML = '<div class="empty">未发现相似条目（相似度<50%）</div>';
-                    return;
-                }
-                let html = `<h4>与 [${itemId}] 相似的条目</h4>`;
-                html += res.similar.map(s => `
-                    <div class="ref-item">
-                        <span class="ref-score">${(s.score*100).toFixed(0)}%</span>
-                        <div class="ref-q">[${s.id}] ${escapeHtml(s.question)}</div>
-                        <button class="btn btn-sm" onclick="mergeItems('${itemId}','${s.id}')">合并到此</button>
-                        <button class="btn btn-sm" onclick="mergeItems('${s.id}','${itemId}')">反向合并</button>
-                    </div>`).join('');
-                el.innerHTML = html;
+                await API.del(`/api/kb/merge_rejections/${encodeURIComponent(key)}`);
+                toast('已恢复', 'success');
+                loadMergeRejections();
             } catch (e) { toast(e.message, 'error'); }
         }
 
-        async function mergeItems(primaryId, secondaryId) {
-            if (!confirm(`确认合并？将保留 [${primaryId}]，删除 [${secondaryId}]，并生成法务确认申请。`)) return;
+        async function generateMergeDraft(primaryId, secondaryId) {
+            toast('正在调用 LLM 生成建议稿...', 'info');
             try {
-                const res = await API.post('/api/kb/items/merge', {
+                const res = await API.post('/api/kb/merge_draft', {
                     primary_id: primaryId,
                     secondary_id: secondaryId
                 });
+                showMergeDraftModal(primaryId, secondaryId, res);
+            } catch (e) { toast(e.message, 'error'); }
+        }
+
+        function showMergeDraftModal(primaryId, secondaryId, res) {
+            const d = res.draft || {};
+            const llmNote = res.llm_used
+                ? '<div class="disclaimer" style="background:#e8f5e9;color:#27ae60">LLM 已生成建议稿，可修改后提交</div>'
+                : '<div class="disclaimer" style="background:#fef3c7;color:#92400e">LLM 未启用，已用字段拼接生成建议稿</div>';
+            let html = `<h3>合并建议稿</h3>`;
+            html += `<p style="color:var(--text-light);font-size:13px;margin-bottom:8px">
+                保留主条目 <strong>[${primaryId}]</strong>，合并次条目 <strong>[${secondaryId}]</strong>（合并后删除）。
+                下方为建议稿，可自由修改后提交，待法务确认后生效。
+            </p>`;
+            html += llmNote;
+            html += '<h4 style="margin-top:12px">建议稿（可修改）</h4>';
+            html += `<div class="field-row"><label>问题</label><textarea id="mdQuestion" rows="2">${escapeHtml(d.question||'')}</textarea></div>`;
+            html += `<div class="field-row"><label>法律解答</label><textarea id="mdLegalAnswer" rows="4">${escapeHtml(d.legal_answer||'')}</textarea></div>`;
+            html += `<div class="field-row"><label>合规风险</label><textarea id="mdRisk" rows="3">${escapeHtml(d.compliance_risk||'')}</textarea></div>`;
+            html += `<div class="field-row"><label>实务建议</label><textarea id="mdAdvice" rows="3">${escapeHtml(d.practical_advice||'')}</textarea></div>`;
+            html += `<div class="field-row"><label>法律依据</label><textarea id="mdBasis" rows="2">${escapeHtml(d.legal_basis||'')}</textarea></div>`;
+            html += `<div class="field-row"><label>分类</label><input type="text" id="mdCategory" value="${escapeHtml(d.category||'未分类')}"></div>`;
+            html += `<div class="field-row"><label>标签（逗号分隔）</label><input type="text" id="mdTags" value="${escapeHtml((d.tags||[]).join(', '))}"></div>`;
+            html += `<div class="toolbar" style="margin-top:12px">
+                <button class="btn" onclick="submitMergeRequest('${primaryId}','${secondaryId}')">提交合并申请</button>
+                <button class="btn btn-secondary" onclick="closeModal()">取消</button>
+            </div>`;
+            showModal(html);
+        }
+
+        async function submitMergeRequest(primaryId, secondaryId) {
+            const tags = (document.getElementById('mdTags').value || '')
+                .split(',').map(s => s.trim()).filter(Boolean);
+            const patch = {
+                question: document.getElementById('mdQuestion').value.trim(),
+                legal_answer: document.getElementById('mdLegalAnswer').value.trim(),
+                compliance_risk: document.getElementById('mdRisk').value.trim(),
+                practical_advice: document.getElementById('mdAdvice').value.trim(),
+                legal_basis: document.getElementById('mdBasis').value.trim(),
+                category: document.getElementById('mdCategory').value.trim(),
+                tags: tags,
+            };
+            if (!patch.question || !patch.legal_answer) {
+                toast('问题和法律解答不能为空', 'warning');
+                return;
+            }
+            try {
+                const res = await API.post('/api/kb/items/merge', {
+                    primary_id: primaryId,
+                    secondary_id: secondaryId,
+                    merged_patch: patch
+                });
                 toast(res.message || '合并申请已生成', 'success');
+                closeModal();
+                autoScanSimilarPairs('active');
+            } catch (e) { toast(e.message, 'error'); }
+        }
+
+        // ---------- A5：归档入库申请审批 ----------
+        async function loadKbSubmitRequests() {
+            const status = document.getElementById('kbSubmitStatus').value || 'pending';
+            try {
+                const reqs = await API.get(`/api/kb/kb_submit_requests?status=${status}`);
+                const el = document.getElementById('kbSubmitList');
+                if (!reqs.length) {
+                    el.innerHTML = '<div class="empty">暂无申请</div>';
+                    return;
+                }
+                el.innerHTML = reqs.map(r => {
+                    const f = r.faq || {};
+                    const statusTag = r.status === 'pending'
+                        ? '<span class="tag" style="background:#fef3c7;color:#92400e">待审批</span>'
+                        : r.status === 'approved'
+                        ? '<span class="tag" style="background:#d1fae5;color:#065f46">已批准</span>'
+                        : '<span class="tag" style="background:#fee2e2;color:#991b1b">已驳回</span>';
+                    return `
+                    <div class="ref-item" style="flex-direction:column;align-items:stretch;padding:12px">
+                        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+                            <strong>申请号：${r.id}</strong>
+                            ${statusTag}
+                            <span style="margin-left:auto;font-size:12px;color:var(--text-light)">提交人：${escapeHtml(r.submitter_name||'')} · ${fmtTime(r.created_at)}</span>
+                        </div>
+                        <div style="font-size:13px;margin-bottom:6px">关联工单：<strong>${escapeHtml(r.order_id||'-')}</strong></div>
+                        <div style="background:#f5f5f5;padding:8px;border-radius:4px;font-size:13px">
+                            <div><strong>问题：</strong>${escapeHtml(f.question||'')}</div>
+                            <div style="margin-top:4px"><strong>法律解答：</strong>${escapeHtml(f.legal_answer||'')}</div>
+                            ${f.compliance_risk ? `<div style="margin-top:4px"><strong>合规风险：</strong>${escapeHtml(f.compliance_risk)}</div>` : ''}
+                            ${f.practical_advice ? `<div style="margin-top:4px"><strong>实务建议：</strong>${escapeHtml(f.practical_advice)}</div>` : ''}
+                            ${f.legal_basis ? `<div style="margin-top:4px"><strong>法律依据：</strong>${escapeHtml(f.legal_basis)}</div>` : ''}
+                            <div style="margin-top:4px;font-size:12px;color:var(--text-light)">分类：${escapeHtml(f.category||'-')} · 标签：${(f.tags||[]).map(escapeHtml).join(', ')}</div>
+                        </div>
+                        ${r.status === 'pending' ? `
+                        <div class="toolbar" style="margin-top:8px">
+                            <button class="btn btn-sm" onclick="approveKbSubmit('${r.id}')">批准入库</button>
+                            <button class="btn btn-sm btn-danger" onclick="rejectKbSubmit('${r.id}')">驳回</button>
+                        </div>` : `<div style="margin-top:8px;font-size:12px;color:var(--text-light)">处理时间：${fmtTime(r.decided_at)}${r.added_id ? ` · 入库条目：${r.added_id}` : ''}</div>`}
+                    </div>`;
+                }).join('');
+            } catch (e) { toast(e.message, 'error'); }
+        }
+
+        async function approveKbSubmit(reqId) {
+            if (!confirm('确认批准该入库申请？条目将正式进入知识库。')) return;
+            try {
+                const res = await API.post(`/api/kb/kb_submit_requests/${reqId}/approve`);
+                toast(`已批准，入库条目：${res.faq_id}`, 'success');
+                loadKbSubmitRequests();
+            } catch (e) { toast(e.message, 'error'); }
+        }
+
+        async function rejectKbSubmit(reqId) {
+            const reason = prompt('请输入驳回原因：');
+            if (reason === null) return;
+            try {
+                await API.post(`/api/kb/kb_submit_requests/${reqId}/reject`, { reason });
+                toast('已驳回', 'success');
+                loadKbSubmitRequests();
             } catch (e) { toast(e.message, 'error'); }
         }
 

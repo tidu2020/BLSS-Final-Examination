@@ -202,6 +202,7 @@ def get_order(order_id: str):
     """工单详情。
 
     业务只能看自己的；法务和管理员可看全部。
+    业务查看时自动标记已读（法务据此判断是否还能撤回已确认审核）。
     """
     order = work_order_store.get(order_id)
     if not order:
@@ -210,6 +211,12 @@ def get_order(order_id: str):
     user = current_user()
     if user["role"] == "business" and order.submitter != user["id"]:
         return jsonify({"error": "无权查看他人工单"}), 403
+
+    # 业务查看时标记已读（用于法务撤回判断）
+    if user["role"] == "business" and order.status in ("confirmed", "archived"):
+        if not getattr(order, "business_read_at", ""):
+            order.mark_business_read()
+            work_order_store.save(order)
 
     return jsonify(order.to_dict())
 
@@ -236,3 +243,49 @@ def withdraw_order(order_id: str):
         return jsonify({"error": str(e)}), 400
 
     return jsonify({"status": "withdrawn", "order_id": order_id})
+
+
+@bp.route("/orders/<order_id>/confirm", methods=["POST"])
+@require_role("business")
+def business_confirm_order(order_id: str):
+    """业务确认法务审核结果（归档前置条件）。
+
+    仅 confirmed 状态可确认；确认后法务才可归档。
+    """
+    order = work_order_store.get(order_id)
+    if not order:
+        return jsonify({"error": "工单不存在"}), 404
+    user = current_user()
+    if order.submitter != user["id"]:
+        return jsonify({"error": "只能确认自己的工单"}), 403
+    try:
+        order.business_confirm()
+        work_order_store.save(order)
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"status": "confirmed", "business_confirmed_at": order.business_confirmed_at})
+
+
+@bp.route("/orders/<order_id>/ask_more", methods=["POST"])
+@require_role("business")
+def business_ask_more(order_id: str):
+    """业务提出新问题，工单回到 reviewing 状态。
+
+    请求体：{"question": "..."}
+    """
+    order = work_order_store.get(order_id)
+    if not order:
+        return jsonify({"error": "工单不存在"}), 404
+    user = current_user()
+    if order.submitter != user["id"]:
+        return jsonify({"error": "只能操作自己的工单"}), 403
+    data = request.get_json() or {}
+    question = (data.get("question") or "").strip()
+    if not question:
+        return jsonify({"error": "问题不能为空"}), 400
+    try:
+        order.business_ask_more(question)
+        work_order_store.save(order)
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"status": "reviewing", "order_id": order_id})

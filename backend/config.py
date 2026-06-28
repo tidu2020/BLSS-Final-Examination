@@ -27,6 +27,7 @@ class Config:
     FAQ_SOURCE = os.path.join(BASE_DIR, "FAQ_四部分版_最终.md")
     WORK_ORDERS_DIR = os.path.join(DATA_DIR, "work_orders")
     ARCHIVE_DIR = os.path.join(DATA_DIR, "archive")
+    MERGE_REJECTIONS_PATH = os.path.join(DATA_DIR, "merge_rejections.json")
 
     # 前端静态文件
     FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")

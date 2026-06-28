@@ -131,7 +131,8 @@ def download_package(order_id: str):
 @bp.route("/orders/<order_id>/archive", methods=["POST"])
 @require_role("legal", "admin")
 def archive_order(order_id: str):
-    """归档工单。"""
+    """归档工单（实际归档逻辑由 legal 蓝图的 /api/legal/orders/<id>/archive 处理，
+    这里保留兼容入口，仅做状态校验）。"""
     order = work_order_store.get(order_id)
     if not order:
         return jsonify({"error": "工单不存在"}), 404

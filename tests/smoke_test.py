@@ -228,7 +228,7 @@ def test_reader():
 
 def main():
     print("=" * 60)
-    print("智能法务系统 — 冒烟测试")
+    print("业法协同系统 — 冒烟测试")
     print("=" * 60)
 
     tests = [

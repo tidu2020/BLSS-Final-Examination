@@ -50,6 +50,9 @@ class ReviewOrchestrator:
     # low：纯 LLM 回答（提示未用知识库）
     RELEVANCE_HIGH = 0.45   # >= 0.45 视为高相关度
     RELEVANCE_LOW = 0.15    # < 0.15 视为低相关度
+    # 引用来源展示阈值：低于此分数的来源不展示给用户
+    # 注：TF-IDF 余弦相似度分布偏低，0.5 偏严格，可按实际效果调整
+    SOURCE_MIN_SCORE = 0.50
 
     def __init__(self, knowledge_base: KnowledgeBase,
                  llm_client: Optional[LlmClient] = None):
@@ -137,7 +140,7 @@ class ReviewOrchestrator:
         if with_disclaimer:
             answer += self.DISCLAIMER
 
-        # 构造引用来源（供前端点开查看）
+        # 构造引用来源（供前端点开查看），过滤低分来源
         sources = [
             {
                 "id": r["item"]["id"],
@@ -150,6 +153,7 @@ class ReviewOrchestrator:
                 "cited": relevance in ("high", "mid"),
             }
             for r in ranked_with_score
+            if r["score"] >= self.SOURCE_MIN_SCORE
         ]
 
         return {

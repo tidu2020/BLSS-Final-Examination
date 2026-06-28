@@ -155,7 +155,7 @@ app = create_app()
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("智能法务系统 — 启动中")
+    print("业法协同系统 — 启动中")
     print(f"知识库：{config.KNOWLEDGE_BASE_PATH}")
     print(f"前端目录：{config.FRONTEND_DIR}")
     print(f"访问地址：http://127.0.0.1:{config.PORT}")
