@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>管理工作台 · 智能法务系统</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="topbar">
+        <div class="brand">智能法务系统 <span class="sub">管理工作台</span></div>
+        <div class="user-info">
+            <span id="userName"></span>
+            <span class="role-tag" style="background:#c0392b">管理员</span>
+            <button class="logout" onclick="logout()">退出</button>
+        </div>
+    </div>
+
+    <div class="layout">
+        <div class="sidebar">
+            <div class="nav-item active" data-tab="dashboard">仪表盘</div>
+            <div class="nav-item" data-tab="kb">知识库管理</div>
+            <div class="nav-item" data-tab="orders">全部工单</div>
+            <div class="nav-item" data-tab="accounts">账户管理</div>
+        </div>
+
+        <div class="main">
+            <!-- 仪表盘 -->
+            <div id="tab-dashboard" class="tab-pane">
+                <div class="card">
+                    <div class="card-title">系统概览</div>
+                    <div class="stat-grid" id="statsGrid"></div>
+                </div>
+            </div>
+
+            <!-- 知识库管理 -->
+            <div id="tab-kb" class="tab-pane hidden">
+                <div class="card">
+                    <div class="card-title">知识库管理</div>
+                    <div class="toolbar">
+                        <input type="text" id="kbSearch" placeholder="搜索问题或解答"
+                            style="flex:1" onkeydown="if(event.key==='Enter')loadKb()">
+                        <select id="kbMonth" onchange="loadKb()">
+                            <option value="">全部月份</option>
+                        </select>
+                        <select id="kbCategory" onchange="loadKb()">
+                            <option value="">全部分类</option>
+                        </select>
+                        <button class="btn" onclick="loadKb()">查询</button>
+                        <button class="btn btn-secondary" onclick="showAddItem()">新增条目</button>
+                        <button class="btn btn-secondary" onclick="rebuildIndex()">重建索引</button>
+                    </div>
+                    <table>
+                        <thead><tr>
+                            <th>ID</th><th>问题</th><th>月份</th>
+                            <th>分类</th><th>标签</th><th>操作</th>
+                        </tr></thead>
+                        <tbody id="kbBody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 全部工单 -->
+            <div id="tab-orders" class="tab-pane hidden">
+                <div class="card">
+                    <div class="card-title">全部工单</div>
+                    <div class="toolbar">
+                        <select id="orderStatus" onchange="loadAllOrders()">
+                            <option value="">全部状态</option>
+                            <option value="submitted_to_legal">待处理</option>
+                            <option value="reviewing">审核中</option>
+                            <option value="confirmed">已确认</option>
+                            <option value="archived">已归档</option>
+                        </select>
+                    </div>
+                    <table>
+                        <thead><tr>
+                            <th>工单号</th><th>提交人</th><th>提交时间</th>
+                            <th>状态</th><th>审核人</th>
+                        </tr></thead>
+                        <tbody id="allOrdersBody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 账户管理 -->
+            <div id="tab-accounts" class="tab-pane hidden">
+                <div class="card">
+                    <div class="card-title">账户管理</div>
+                    <div class="toolbar">
+                        <div class="spacer"></div>
+                        <button class="btn" onclick="showAddAccount()">新增账户</button>
+                    </div>
+                    <table>
+                        <thead><tr>
+                            <th>账号</th><th>姓名</th><th>角色</th>
+                            <th>部门</th><th>操作</th>
+                        </tr></thead>
+                        <tbody id="accountsBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/common.js"></script>
+    <script>
+        let currentUser = null;
+
+        (async () => {
+            currentUser = await requireLogin();
+            if (!currentUser) return;
+            if (currentUser.role !== 'admin') {
+                redirectByRole(currentUser.role);
+                return;
+            }
+            document.getElementById('userName').textContent = currentUser.name;
+            document.querySelectorAll('.nav-item').forEach(item => {
+                item.onclick = () => switchTab(item.dataset.tab);
+            });
+            loadStats();
+        })();
+
+        function switchTab(tab) {
+            document.querySelectorAll('.nav-item').forEach(i =>
+                i.classList.toggle('active', i.dataset.tab === tab));
+            document.querySelectorAll('.tab-pane').forEach(p =>
+                p.classList.add('hidden'));
+            document.getElementById('tab-' + tab).classList.remove('hidden');
+            if (tab === 'kb') loadKb();
+            if (tab === 'orders') loadAllOrders();
+            if (tab === 'accounts') loadAccounts();
+            if (tab === 'dashboard') loadStats();
+        }
+
+        // ---------- 仪表盘 ----------
+        async function loadStats() {
+            try {
+                const s = await API.get('/api/kb/stats');
+                document.getElementById('statsGrid').innerHTML = `
+                    <div class="stat-card"><div class="num">${s.total}</div><div class="label">知识库条目</div></div>
+                    <div class="stat-card"><div class="num">${s.months.length}</div><div class="label">覆盖月份</div></div>
+                    <div class="stat-card"><div class="num">${s.categories.length}</div><div class="label">分类数</div></div>
+                `;
+            } catch (e) { toast(e.message, 'error'); }
+        }
+
+        // ---------- 知识库 ----------
+        async function loadKb() {
+            const q = document.getElementById('kbSearch').value.trim();
+            const month = document.getElementById('kbMonth').value;
+            const category = document.getElementById('kbCategory').value;
+            let url = '/api/kb/items?limit=50';
+            if (q) url += `&q=${encodeURIComponent(q)}`;
+            if (month) url += `&month=${month}`;
+            if (category) url += `&category=${encodeURIComponent(category)}`;
+            try {
+                // 先加载统计获取月份/分类选项
+                if (!document.getElementById('kbMonth').options.length > 1) {
+                    const stats = await API.get('/api/kb/stats');
+                    const monthSel = document.getElementById('kbMonth');
+                    stats.months.forEach(m => {
+                        const opt = document.createElement('option');
+                        opt.value = m; opt.textContent = `${m.slice(0,4)}-${m.slice(4)}`;
+                        monthSel.appendChild(opt);
+                    });
+                    const catSel = document.getElementById('kbCategory');
+                    stats.categories.forEach(c => {
+                        const opt = document.createElement('option');
+                        opt.value = c; opt.textContent = c;
+                        catSel.appendChild(opt);
+                    });
+                }
+
+                const res = await API.get(url);
+                const body = document.getElementById('kbBody');
+                if (!res.items.length) {
+                    body.innerHTML = '<tr><td colspan="6" class="empty">暂无数据</td></tr>';
+                    return;
+                }
+                body.innerHTML = res.items.map(it => `
+                    <tr>
+                        <td>${it.id}</td>
+                        <td>${escapeHtml(it.question).slice(0, 40)}${it.question.length > 40 ? '...' : ''}</td>
+                        <td>${it.month || '-'}</td>
+                        <td>${escapeHtml(it.category || '-')}</td>
+                        <td>${(it.tags || []).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join('')}</td>
+                        <td>
+                            <button class="btn btn-sm" onclick="viewItem('${it.id}')">查看</button>
+                            <button class="btn btn-sm btn-danger" onclick="deleteItem('${it.id}')">删除</button>
+                        </td>
+                    </tr>`).join('');
+            } catch (e) { toast(e.message, 'error'); }
+        }
+
+        async function viewItem(id) {
+            try {
+                const it = await API.get(`/api/kb/items/${id}`);
+                let html = `<h3>${it.id}</h3>`;
+                html += `<p><strong>问题：</strong>${escapeHtml(it.question)}</p>`;
+                html += `<p><strong>分类：</strong>${escapeHtml(it.category || '-')}</p>`;
+                html += `<p><strong>标签：</strong>${(it.tags||[]).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join('')}</p>`;
+                html += `<h4 style="margin-top:16px">法律解答</h4><div class="chat-msg ai">${escapeHtml(it.legal_answer)}</div>`;
+                html += `<h4 style="margin-top:16px">合规风险</h4><div class="chat-msg ai">${escapeHtml(it.compliance_risk)}</div>`;
+                html += `<h4 style="margin-top:16px">实操建议</h4><div class="chat-msg ai">${escapeHtml(it.practical_advice)}</div>`;
+                html += `<h4 style="margin-top:16px">相关法条</h4><div class="chat-msg ai">${escapeHtml(it.legal_basis)}</div>`;
+                showModal(html);
+            } catch (e) { toast(e.message, 'error'); }
+        }
+
+        async function deleteItem(id) {
+            if (!confirm(`确认删除条目 ${id}？此操作不可恢复。`)) return;
+            try {
+                await API.del(`/api/kb/items/${id}`);
+                toast('已删除');
+                loadKb();
+            } catch (e) { toast(e.message, 'error'); }
+        }
+
+        function showAddItem() {
+            const html = `
+                <h3>新增知识库条目</h3>
+                <div class="form-group"><label>问题 <span class="required">*</span></label><input type="text" id="newQ" placeholder="以问号结尾"></div>
+                <div class="form-group"><label>法律解答 <span class="required">*</span></label><textarea id="newAns" rows="3"></textarea></div>
+                <div class="form-group"><label>合规风险 <span class="required">*</span></label><textarea id="newRisk" rows="2"></textarea></div>
+                <div class="form-group"><label>实操建议 <span class="required">*</span></label><textarea id="newAdv" rows="2"></textarea></div>
+                <div class="form-group"><label>相关法条 <span class="required">*</span></label><textarea id="newBasis" rows="2" placeholder="《法名》第X条 ..."></textarea></div>
+                <div class="form-group"><label>分类</label><input type="text" id="newCat" placeholder="如：合同"></div>
+                <div class="form-group"><label>标签（逗号分隔）</label><input type="text" id="newTags" placeholder="合同,付款"></div>
+                <div class="toolbar">
+                    <button class="btn" onclick="submitNewItem()">提交</button>
+                    <button class="btn btn-secondary" onclick="closeModal()">取消</button>
+                </div>
+                <div id="newItemResult" style="margin-top:12px"></div>
+            `;
+            showModal(html);
+        }
+
+        async function submitNewItem() {
+            const tags = document.getElementById('newTags').value
+                .split(',').map(s => s.trim()).filter(Boolean);
+            const item = {
+                question: document.getElementById('newQ').value.trim(),
+                legal_answer: document.getElementById('newAns').value.trim(),
+                compliance_risk: document.getElementById('newRisk').value.trim(),
+                practical_advice: document.getElementById('newAdv').value.trim(),
+                legal_basis: document.getElementById('newBasis').value.trim(),
+                category: document.getElementById('newCat').value.trim() || '未分类',
+                tags: tags,
+                month: new Date().toISOString().slice(0, 6).replace('-', ''),
+            };
+            try {
+                await API.post('/api/kb/items', item);
+                toast('已新增条目');
+                closeModal();
+                loadKb();
+            } catch (e) {
+                if (e.data && e.data.need_force) {
+                    document.getElementById('newItemResult').innerHTML =
+                        `<div class="disclaimer">${e.data.warnings.map(w => '· ' + w).join('<br>')}<br><button class="btn btn-sm" onclick="forceNewItem()" style="margin-top:8px">强制入库</button></div>`;
+                } else {
+                    toast(e.message, 'error');
+                }
+            }
+        }
+
+        async function forceNewItem() {
+            const tags = document.getElementById('newTags').value
+                .split(',').map(s => s.trim()).filter(Boolean);
+            const item = {
+                question: document.getElementById('newQ').value.trim(),
+                legal_answer: document.getElementById('newAns').value.trim(),
+                compliance_risk: document.getElementById('newRisk').value.trim(),
+                practical_advice: document.getElementById('newAdv').value.trim(),
+                legal_basis: document.getElementById('newBasis').value.trim(),
+                category: document.getElementById('newCat').value.trim() || '未分类',
+                tags: tags,
+                month: new Date().toISOString().slice(0, 6).replace('-', ''),
+            };
+            try {
+                await API.post('/api/kb/items?force=true', item);
+                toast('已强制入库');
+                closeModal();
+                loadKb();
+            } catch (e) { toast(e.message, 'error'); }
+        }
+
+        async function rebuildIndex() {
+            if (!confirm('重建检索索引？知识库较大时可能需要几秒。')) return;
+            try {
+                const res = await API.post('/api/kb/rebuild');
+                toast(`索引已重建，共 ${res.items_count} 条`);
+            } catch (e) { toast(e.message, 'error'); }
+        }
+
+        // ---------- 全部工单 ----------
+        async function loadAllOrders() {
+            const status = document.getElementById('orderStatus').value;
+            const url = '/api/legal/orders' + (status ? `?status=${status}` : '');
+            try {
+                const orders = await API.get(url);
+                const body = document.getElementById('allOrdersBody');
+                if (!orders.length) {
+                    body.innerHTML = '<tr><td colspan="5" class="empty">暂无工单</td></tr>';
+                    return;
+                }
+                body.innerHTML = orders.map(o => `
+                    <tr>
+                        <td>${o.id}</td>
+                        <td>${escapeHtml(o.submitter_name || o.submitter)}</td>
+                        <td>${fmtTime(o.submitted_at)}</td>
+                        <td>${statusTag(o.status)}</td>
+                        <td>${escapeHtml(o.reviewer_name || '-')}</td>
+                    </tr>`).join('');
+            } catch (e) { toast(e.message, 'error'); }
+        }
+
+        // ---------- 账户管理 ----------
+        async function loadAccounts() {
+            try {
+                const accounts = await API.get('/api/auth/accounts');
+                const body = document.getElementById('accountsBody');
+                const roleMap = { business: '业务', legal: '法务', admin: '管理员' };
+                body.innerHTML = accounts.map(a => `
+                    <tr>
+                        <td>${a.id}</td>
+                        <td>${escapeHtml(a.name)}</td>
+                        <td><span class="tag">${roleMap[a.role] || a.role}</span></td>
+                        <td>${escapeHtml(a.department || '-')}</td>
+                        <td>${a.id !== currentUser.id ? `<button class="btn btn-sm btn-danger" onclick="deleteAccount('${a.id}')">删除</button>` : '<span style="color:var(--text-light);font-size:12px">当前用户</span>'}</td>
+                    </tr>`).join('');
+            } catch (e) { toast(e.message, 'error'); }
+        }
+
+        function showAddAccount() {
+            const html = `
+                <h3>新增账户</h3>
+                <div class="form-group"><label>角色 <span class="required">*</span></label>
+                    <select id="newRole">
+                        <option value="business">业务</option>
+                        <option value="legal">法务</option>
+                        <option value="admin">管理员</option>
+                    </select>
+                </div>
+                <div class="form-group"><label>账号 <span class="required">*</span></label><input type="text" id="newAid"></div>
+                <div class="form-group"><label>姓名 <span class="required">*</span></label><input type="text" id="newName"></div>
+                <div class="form-group"><label>密码 <span class="required">*</span></label><input type="password" id="newPwd"></div>
+                <div class="form-group"><label>部门</label><input type="text" id="newDept"></div>
+                <div class="toolbar">
+                    <button class="btn" onclick="submitAccount()">创建</button>
+                    <button class="btn btn-secondary" onclick="closeModal()">取消</button>
+                </div>
+            `;
+            showModal(html);
+        }
+
+        async function submitAccount() {
+            const role = document.getElementById('newRole').value;
+            const user_id = document.getElementById('newAid').value.trim();
+            const name = document.getElementById('newName').value.trim();
+            const password = document.getElementById('newPwd').value;
+            const department = document.getElementById('newDept').value.trim();
+            if (!user_id || !name || !password) { toast('账号/姓名/密码必填', 'warning'); return; }
+            try {
+                await API.post('/api/auth/accounts', { role, user_id, name, password, department });
+                toast('已创建账户');
+                closeModal();
+                loadAccounts();
+            } catch (e) { toast(e.message, 'error'); }
+        }
+
+        async function deleteAccount(id) {
+            if (!confirm(`确认删除账户 ${id}？`)) return;
+            try {
+                await API.del(`/api/auth/accounts/${id}`);
+                toast('已删除');
+                loadAccounts();
+            } catch (e) { toast(e.message, 'error'); }
+        }
+
+        // 通用模态框
+        function showModal(html) {
+            let mask = document.querySelector('.modal-mask');
+            if (mask) mask.remove();
+            mask = document.createElement('div');
+            mask.className = 'modal-mask';
+            mask.innerHTML = `<div class="modal">${html}</div>`;
+            mask.onclick = e => { if (e.target === mask) mask.remove(); };
+            document.body.appendChild(mask);
+        }
+        function closeModal() {
+            const mask = document.querySelector('.modal-mask');
+            if (mask) mask.remove();
+        }
+    </script>
+</body>
+</html>

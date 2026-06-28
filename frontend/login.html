@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>智能法务系统 · 登录</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="login-page">
+    <div class="login-card">
+        <div class="logo">
+            <h1>智能法务系统</h1>
+            <p>国有企业法律事务智能服务平台</p>
+        </div>
+
+        <form id="loginForm" onsubmit="return doLogin(event)">
+            <div class="form-group">
+                <label>账号</label>
+                <input type="text" id="user_id" placeholder="请输入账号" required autocomplete="username">
+            </div>
+            <div class="form-group">
+                <label>密码</label>
+                <input type="password" id="password" placeholder="请输入密码" required autocomplete="current-password">
+            </div>
+            <button type="submit" class="btn btn-block" id="loginBtn">登 录</button>
+        </form>
+
+        <div class="hint">
+            <strong>演示账号</strong><br>
+            业务：business01 / 123456<br>
+            法务：legal01 / 123456<br>
+            管理员：admin01 / 123456
+        </div>
+    </div>
+
+    <script src="/static/common.js"></script>
+    <script>
+        // 已登录则自动跳转
+        (async () => {
+            try {
+                const me = await API.get('/api/auth/me');
+                redirectByRole(me.role);
+            } catch { /* 未登录，停留 */ }
+        })();
+
+        async function doLogin(event) {
+            event.preventDefault();
+            const userId = document.getElementById('user_id').value.trim();
+            const password = document.getElementById('password').value;
+            const btn = document.getElementById('loginBtn');
+
+            btn.disabled = true;
+            btn.textContent = '登录中...';
+
+            try {
+                const res = await API.post('/api/auth/login', {
+                    user_id: userId,
+                    password: password,
+                });
+                toast(`欢迎，${res.name}`, 'success');
+                setTimeout(() => redirectByRole(res.role), 500);
+            } catch (e) {
+                toast(e.message, 'error');
+                btn.disabled = false;
+                btn.textContent = '登 录';
+            }
+            return false;
+        }
+    </script>
+</body>
+</html>

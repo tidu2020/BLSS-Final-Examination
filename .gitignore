@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+*.egg-info/
+
+# IDE
+.codebuddy/
+.workbuddy/
+.vscode/
+.idea/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
+
+# 运行时数据（保留 accounts.json 和 knowledge_base.json 用于演示）
+data/sessions/
+data/archive/
+data/work_orders/
+
+# 临时文件
+cookies.txt

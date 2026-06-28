@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>业务工作台 · 智能法务系统</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="topbar">
+        <div class="brand">智能法务系统 <span class="sub">业务工作台</span></div>
+        <div class="user-info">
+            <span id="userName"></span>
+            <span class="role-tag">业务</span>
+            <button class="logout" onclick="logout()">退出</button>
+        </div>
+    </div>
+
+    <div class="layout">
+        <div class="sidebar">
+            <div class="nav-item active" data-tab="consult">智能咨询</div>
+            <div class="nav-item" data-tab="materials">上传材料</div>
+            <div class="nav-item" data-tab="orders">我的工单</div>
+        </div>
+
+        <div class="main">
+            <!-- 智能咨询 -->
+            <div id="tab-consult" class="tab-pane">
+                <div class="card">
+                    <div class="card-title">智能法律咨询</div>
+                    <p style="color:var(--text-light);font-size:13px;margin-bottom:12px">
+                        输入您遇到的法律问题，AI 将基于知识库给出参考意见。
+                        如需正式法律意见，请点击"提交法务处理"。
+                    </p>
+                    <div class="chat-area" id="chatArea">
+                        <div class="empty">暂无对话。请在下方输入问题开始咨询。</div>
+                    </div>
+                    <div class="form-group">
+                        <textarea id="questionInput" rows="3"
+                            placeholder="例如：合同相对方要求第三方付款可以吗？"></textarea>
+                    </div>
+                    <div class="toolbar">
+                        <button class="btn" onclick="askQuestion()">发送咨询</button>
+                        <div class="spacer"></div>
+                        <button class="btn btn-secondary" onclick="closeSession()">仅参考，结束</button>
+                        <button class="btn btn-danger" onclick="submitToLegal()">提交法务处理</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 上传材料 -->
+            <div id="tab-materials" class="tab-pane hidden">
+                <div class="card">
+                    <div class="card-title">上传材料文件</div>
+                    <p style="color:var(--text-light);font-size:13px;margin-bottom:12px">
+                        支持合同、对外函件、采购文件、上会议题等文档（.txt / .docx / .md）。
+                        上传后材料会附加到当前咨询会话，随工单一并提交法务。
+                    </p>
+                    <input type="file" id="fileInput" accept=".txt,.docx,.md">
+                    <div class="toolbar" style="margin-top:12px">
+                        <button class="btn" onclick="uploadFile()">上传</button>
+                    </div>
+                    <div id="materialList" style="margin-top:16px"></div>
+                </div>
+            </div>
+
+            <!-- 我的工单 -->
+            <div id="tab-orders" class="tab-pane hidden">
+                <div class="card">
+                    <div class="card-title">我提交的工单</div>
+                    <table id="ordersTable">
+                        <thead>
+                            <tr>
+                                <th>工单号</th><th>提交时间</th>
+                                <th>状态</th><th>法务审核人</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="ordersBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/common.js"></script>
+    <script>
+        let currentUser = null;
+
+        (async () => {
+            currentUser = await requireLogin();
+            if (!currentUser) return;
+            if (currentUser.role !== 'business') {
+                redirectByRole(currentUser.role);
+                return;
+            }
+            document.getElementById('userName').textContent = currentUser.name;
+            // 侧边栏切换
+            document.querySelectorAll('.nav-item').forEach(item => {
+                item.onclick = () => switchTab(item.dataset.tab);
+            });
+            loadSession();
+            loadOrders();
+        })();
+
+        function switchTab(tab) {
+            document.querySelectorAll('.nav-item').forEach(i =>
+                i.classList.toggle('active', i.dataset.tab === tab));
+            document.querySelectorAll('.tab-pane').forEach(p =>
+                p.classList.add('hidden'));
+            document.getElementById('tab-' + tab).classList.remove('hidden');
+            if (tab === 'orders') loadOrders();
+            if (tab === 'materials') loadSession();
+        }
+
+        // ---------- 智能咨询 ----------
+        async function askQuestion() {
+            const input = document.getElementById('questionInput');
+            const q = input.value.trim();
+            if (!q) { toast('请输入问题', 'warning'); return; }
+
+            const chatArea = document.getElementById('chatArea');
+            // 清空空状态
+            if (chatArea.querySelector('.empty')) chatArea.innerHTML = '';
+            // 渲染用户问题
+            chatArea.innerHTML += `<div class="chat-msg user"><div class="role">我</div>${escapeHtml(q)}</div>`;
+            input.value = '';
+            chatArea.scrollTop = chatArea.scrollHeight;
+
+            try {
+                const res = await API.post('/api/business/consult', { question: q });
+                chatArea.innerHTML += `<div class="chat-msg ai"><div class="role">AI 助手</div>${escapeHtml(res.answer)}</div>`;
+                if (res.results && res.results.length) {
+                    let refs = '<div style="margin-top:8px;font-size:12px;color:var(--text-light)">参考条目：</div>';
+                    res.results.forEach(r => {
+                        refs += `<div class="ref-item"><span class="ref-score">${(r.score*100).toFixed(0)}%</span><div class="ref-q">[${r.id}] ${escapeHtml(r.question)}</div></div>`;
+                    });
+                    chatArea.lastChild.innerHTML += refs;
+                }
+                chatArea.scrollTop = chatArea.scrollHeight;
+            } catch (e) {
+                toast(e.message, 'error');
+            }
+        }
+
+        async function loadSession() {
+            try {
+                const s = await API.get('/api/business/session');
+                const chatArea = document.getElementById('chatArea');
+                if (!s.dialogue || s.dialogue.length === 0) {
+                    chatArea.innerHTML = '<div class="empty">暂无对话。请在上方输入问题开始咨询。</div>';
+                    return;
+                }
+                chatArea.innerHTML = s.dialogue.map(d => {
+                    const role = { user: '我', ai: 'AI 助手' }[d.role] || d.role;
+                    const cls = d.role === 'user' ? 'user' : 'ai';
+                    return `<div class="chat-msg ${cls}"><div class="role">${role}</div>${escapeHtml(d.content)}</div>`;
+                }).join('');
+                chatArea.scrollTop = chatArea.scrollHeight;
+                // 渲染材料列表
+                renderMaterials(s.materials || []);
+            } catch { /* 无活跃会话，忽略 */ }
+        }
+
+        function renderMaterials(materials) {
+            const el = document.getElementById('materialList');
+            if (!materials.length) {
+                el.innerHTML = '<div class="empty">暂无上传材料</div>';
+                return;
+            }
+            el.innerHTML = '<table><thead><tr><th>文件名</th><th>大小</th></tr></thead><tbody>' +
+                materials.map(m => `<tr><td>${escapeHtml(m.filename)}</td><td>${m.size} 字</td></tr>`).join('') +
+                '</tbody></table>';
+        }
+
+        async function uploadFile() {
+            const input = document.getElementById('fileInput');
+            if (!input.files.length) { toast('请选择文件', 'warning'); return; }
+            const fd = new FormData();
+            fd.append('file', input.files[0]);
+            try {
+                const res = await API.upload('/api/business/upload', fd);
+                toast(`已上传 ${res.filename}（${res.size} 字）`);
+                input.value = '';
+                loadSession();
+            } catch (e) {
+                toast(e.message, 'error');
+            }
+        }
+
+        async function closeSession() {
+            if (!confirm('确认结束本次咨询？结束后需重新提问。')) return;
+            try {
+                // 获取当前会话 id
+                const s = await API.get('/api/business/session');
+                await API.post(`/api/business/sessions/${s.id}/close`);
+                toast('已结束会话');
+                loadSession();
+            } catch (e) {
+                toast(e.message, 'error');
+            }
+        }
+
+        async function submitToLegal() {
+            if (!confirm('确认提交法务处理？提交后法务将审核您的咨询和材料。')) return;
+            try {
+                const res = await API.post('/api/business/submit_order', {});
+                toast(`已提交法务，工单号 ${res.order_id}`, 'success');
+                loadSession();
+                loadOrders();
+            } catch (e) {
+                toast(e.message, 'error');
+            }
+        }
+
+        // ---------- 我的工单 ----------
+        async function loadOrders() {
+            try {
+                const orders = await API.get('/api/business/my_orders');
+                const body = document.getElementById('ordersBody');
+                if (!orders.length) {
+                    body.innerHTML = '<tr><td colspan="5" class="empty">暂无工单</td></tr>';
+                    return;
+                }
+                body.innerHTML = orders.map(o => `
+                    <tr>
+                        <td>${o.id}</td>
+                        <td>${fmtTime(o.submitted_at)}</td>
+                        <td>${statusTag(o.status)}</td>
+                        <td>${escapeHtml(o.reviewer_name || '-')}</td>
+                        <td><button class="btn btn-sm" onclick="viewOrder('${o.id}')">查看</button></td>
+                    </tr>`).join('');
+            } catch (e) {
+                toast(e.message, 'error');
+            }
+        }
+
+        async function viewOrder(id) {
+            try {
+                const o = await API.get(`/api/business/orders/${id}`);
+                let html = `<h3>工单 ${o.id}</h3>`;
+                html += `<p><strong>状态：</strong>${statusTag(o.status)}</p>`;
+                html += `<p><strong>提交时间：</strong>${fmtTime(o.submitted_at)}</p>`;
+                if (o.reviewer_name) html += `<p><strong>法务审核人：</strong>${escapeHtml(o.reviewer_name)}</p>`;
+                html += `<p><strong>材料数：</strong>${o.materials.length} 份</p>`;
+                html += '<h4 style="margin-top:16px">咨询对话</h4>';
+                o.dialogue.forEach(d => {
+                    const role = { user: '业务', ai: 'AI', legal: '法务' }[d.role] || d.role;
+                    html += `<div class="chat-msg ${d.role === 'user' ? 'user' : 'ai'}"><div class="role">${role}</div>${escapeHtml(d.content)}</div>`;
+                });
+                if (o.legal_conclusion) {
+                    html += '<h4 style="margin-top:16px">法务结论</h4>';
+                    html += `<div class="chat-msg ai">${escapeHtml(o.legal_conclusion)}</div>`;
+                }
+                showModal(html);
+            } catch (e) {
+                toast(e.message, 'error');
+            }
+        }
+
+        function showModal(html) {
+            const mask = document.createElement('div');
+            mask.className = 'modal-mask';
+            mask.innerHTML = `<div class="modal">${html}<div style="margin-top:16px;text-align:right"><button class="btn" onclick="this.closest('.modal-mask').remove()">关闭</button></div></div>`;
+            mask.onclick = e => { if (e.target === mask) mask.remove(); };
+            document.body.appendChild(mask);
+        }
+
+        // 回车发送
+        document.getElementById('questionInput').addEventListener('keydown', e => {
+            if (e.ctrlKey && e.key === 'Enter') askQuestion();
+        });
+    </script>
+</body>
+</html>
