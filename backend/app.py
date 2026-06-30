@@ -30,6 +30,7 @@ from backend.knowledge import routes as knowledge_routes
 from backend.report import routes as report_routes
 from backend.archive import routes as archive_routes
 from backend.file_review import routes as file_review_routes
+from backend.law_search import routes as law_search_routes
 
 
 def create_app() -> Flask:
@@ -105,6 +106,7 @@ def create_app() -> Flask:
     app.register_blueprint(report_routes.bp)
     app.register_blueprint(archive_routes.bp)
     app.register_blueprint(file_review_routes.bp)
+    app.register_blueprint(law_search_routes.bp)
 
     # 4. 前端静态文件服务
     frontend_dir = config.FRONTEND_DIR
